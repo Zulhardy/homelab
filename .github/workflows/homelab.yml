@@ -1,11 +1,12 @@
 name: homelab
 
 # After a merge that changes the homelab setup, apply the Ansible playbooks to every VM
-# (base.yml, k3s.yml, openbao.yml, automation-access.yml). HIGH RISK, so it waits for approval
+# (base.yml, k3s.yml, openbao.yml, automation-access.yml), then onboard the allowed apps (homelab_apps in
+# ansible/inventory/group_vars/all.yml) for zulhardy-lab/devops-projects. HIGH RISK, so it waits for approval
 # (GitHub environment "platform"). Runs on ops01's runner. Gets a 10-minute SSH certificate from OpenBao via GitHub OIDC
 # (scripts/ci-homelab.sh). No stored keys or passwords.
 #
-# NOTE: OpenBao only accepts GitHub tokens from this file (and apps.yml) on main.
+# NOTE: OpenBao's "platform" role only accepts GitHub tokens from this file, on main of this repo (by repo ID).
 #       Renaming it breaks the pipeline until scripts/bootstrap-automation.sh is updated and re-run.
 on:
   push:
@@ -13,6 +14,7 @@ on:
     paths:
       - "ansible/**"
       - "scripts/ci-homelab.sh"
+      - "scripts/onboard-app.sh"
       - "scripts/lib/**"
       - ".github/workflows/homelab.yml"
   workflow_dispatch:

@@ -85,7 +85,7 @@ sequenceDiagram
     participant V as VM sshd
     J->>G: request an ID token, audience openbao-homelab
     G-->>J: signed token with repo, branch, workflow, environment
-    J->>B: log in, role apps-dev, apps-prd, apps-check or platform
+    J->>B: log in, role platform (homelab) or projects-check / -dev / -prd (devops-projects)
     B->>B: check repo id, main branch, workflow file, environment, audience
     B-->>J: OpenBao session, 10 minutes
     alt homelab playbooks
@@ -106,13 +106,13 @@ What's configured in OpenBao (by the bootstrap):
 
 | Path | What |
 |---|---|
-| `auth/jwt-github/role/apps-check` | `apps.yml`, no environment → policy `apps-check`: read which apps are onboarded |
-| `auth/jwt-github/role/apps-dev` | `apps.yml`, environment `dev` → policy `apps-dev`: tokens for `kubernetes/creds/dev-*` only |
-| `auth/jwt-github/role/apps-prd` | `apps.yml`, environment `prd` (approval) → policy `apps-prd`: tokens for `kubernetes/creds/prd-*` only |
-| `auth/jwt-github/role/platform` | `homelab.yml` or `apps.yml`, environment `platform` (approval) → policy `platform`: sign `automation` SSH certificates; cluster-admin tokens; create Kubernetes roles for new apps. **Can't** change policies, login methods or the SSH CA |
-| (all four roles) | Also require repo ID 1473136403, branch `main`, push or manual run, audience `openbao-homelab`; sessions last 10 minutes (max 15) |
+| `auth/jwt-github/role/platform` | homelab (repo ID 1473136403) `homelab.yml`, environment `platform` (approval) → policy `platform`: sign `automation` SSH certificates; cluster-admin tokens; create Kubernetes roles for the apps in `homelab_apps`. **Can't** change policies, login methods or the SSH CA |
+| `auth/jwt-github/role/projects-check` | devops-projects (repo ID 1473714389) `apps.yml`, no environment → policy `projects-check`: read which apps are onboarded |
+| `auth/jwt-github/role/projects-dev` | devops-projects `apps.yml`, environment `dev` → policy `projects-dev`: tokens for `kubernetes/creds/dev-*` only |
+| `auth/jwt-github/role/projects-prd` | devops-projects `apps.yml`, environment `prd` (approval) → policy `projects-prd`: tokens for `kubernetes/creds/prd-*` only |
+| (all four roles) | Also require branch `main`, push or manual run, audience `openbao-homelab`; sessions last 10 minutes (max 15). The old `apps-check` / `apps-dev` / `apps-prd` roles are removed by the bootstrap |
 | `ssh-client-signer/` | SSH certificate authority; role `automation`: user certificates for principal `automation` only, 10 minutes (max 15) |
-| `kubernetes/` | Mints Kubernetes tokens using the `openbao-broker` account. Roles: `homelab-platform` (cluster-admin, for onboarding), and per app `dev-<app>` / `prd-<app>` (that environment's `deployer` only) |
+| `kubernetes/` | Mints Kubernetes tokens using the `openbao-broker` account. Roles: `homelab-platform` (cluster-admin, for onboarding), and per allowed app `dev-<app>` / `prd-<app>` (that environment's `deployer` only) |
 
 Older setups had a single login role `homelab-platform` (and before that `hpa-demo-deploy`); the bootstrap deletes
 them, which only removes access.

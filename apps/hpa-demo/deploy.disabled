@@ -1,9 +1,0 @@
-Deploying hpa-demo to DEV and PRD is switched off (decided 2026-11-27): no demo should run on the homelab for now.
-
-While this file exists, the apps pipeline still runs hpa-demo's unit tests, integration test and security scans,
-and builds its image, but does not onboard it or deploy it to DEV or PRD.
-
-To switch deploying back on: delete this file in a pull request. After merging, approve the one-time onboarding
-(environment "platform"); DEV then deploys automatically and PRD after approval (environment "prd").
-
-You can still try the demo by hand on any cluster: see README.md ("Run it").
