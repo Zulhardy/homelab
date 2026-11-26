@@ -1,6 +1,6 @@
 # Automation: everything after merge
 
-**Humans review and merge pull requests, and approve high-risk steps. Everything else is automatic.**
+**People review and merge pull requests, and approve high-risk steps. Everything else is automatic.**
 
 | Step | Approval? | Why |
 |---|---|---|

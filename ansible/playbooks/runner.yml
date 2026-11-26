@@ -1,6 +1,6 @@
 ---
 # Installs the GitHub Actions self-hosted runner on ops01 as a dedicated, non-root user.
-# The registration token is short-lived and typed in by the human at run time; it is never stored.
+# The registration token is short-lived and typed in by you at run time; it is never stored.
 - name: Install GitHub Actions self-hosted runner
   hosts: control
   become: true

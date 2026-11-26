@@ -2,7 +2,7 @@ name: PR checks
 
 # Every pull request, on GitHub-hosted runners (free for public repos), never on ops01:
 # the self-hosted runner is reserved for workflows triggered by pushes to main, i.e. only after
-# a human has reviewed and merged. No approvals needed here: nothing is deployed.
+# someone has reviewed and merged. No approvals needed here: nothing is deployed.
 #
 #   lint       : yamllint, ansible syntax-check + ansible-lint, shellcheck
 #   repo-scan  : Trivy: secrets, misconfigurations (Dockerfiles, Kubernetes, ...), dependency vulnerabilities

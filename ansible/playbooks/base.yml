@@ -3,7 +3,7 @@
 # (ops01 / prd01 / dev01). Runs first, before k3s.yml.
 #
 # Renaming a running k3s node makes it join as a NEW node; the old node entry has to be removed
-# by a human afterwards (docs/K3S.md, "Renaming nodes"). k3s.yml pins the node name to the inventory
+# by you afterwards (docs/K3S.md, "Renaming nodes"). k3s.yml pins the node name to the inventory
 # name, so this only happens when the inventory name changes.
 
 - name: Base setup

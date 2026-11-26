@@ -6,7 +6,7 @@
 # - Auto-unseal with a static key file (/etc/openbao/seal/homelab-1.key), created once, never overwritten.
 #   BACK IT UP (see docs/OPENBAO.md). Switching an existing vault to it needs a one-time migration
 #   (scripts/bootstrap-automation.sh does that).
-# - Does NOT initialise OpenBao: that produces the recovery keys, which only the human handles.
+# - Does NOT initialise OpenBao: that produces the recovery keys, which only you handle.
 - name: Install OpenBao
   hosts: control
   become: true
