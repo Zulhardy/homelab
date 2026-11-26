@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ONE-TIME bootstrap, run by a HUMAN on ops01 as your normal user (not with sudo).
+# ONE-TIME bootstrap, run by you, on ops01, as your normal user (not with sudo).
 # After this, the only manual step in the homelab is reviewing and merging pull requests.
 #
 # It asks for: your sudo password, and 2 of your 3 OpenBao unseal/recovery keys. Nothing is written to disk

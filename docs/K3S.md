@@ -55,7 +55,7 @@ kubectl top nodes
 
 k3s knows a node by its name. When a node is renamed (e.g. docker01 → ops01, linux01 → prd01), it joins as a
 **new** node and the old entry stays behind as `NotReady`. The pods on the old entry are only moved once it is
-removed. Removing it is yours to do (the rules keep deletions with the human):
+removed. Removing it is up to you (deletions are always done by you, not the pipeline):
 
 ```bash
 kubectl get nodes                           # old names show NotReady

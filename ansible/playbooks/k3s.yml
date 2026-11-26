@@ -246,7 +246,7 @@
       changed_when: false
       when: not ansible_check_mode
 
-    - name: Tell the human about old node entries (removing them is a manual step)
+    - name: List old node entries for you to remove (removing them is a manual step)
       ansible.builtin.debug:
         msg: >-
           Old node entries: {{ k3s_all_nodes.stdout.split() | difference(groups['k3s_cluster']) }}.

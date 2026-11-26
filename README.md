@@ -4,7 +4,7 @@ This is a repo for my Devops Homelab
 A free workspace on three Ubuntu VMs (Hyper-V) used to build and test a group capstone project:
 a cloud-hosted web application with a database, deployed to Microsoft Azure.
 
-**Humans only review and merge pull requests, and approve high-risk steps** (production deploys and
+**People only review and merge pull requests, and approve high-risk steps** (production deploys and
 infrastructure changes). Everything else is automatic: tests, security scans, image builds, and the DEV deploy.
 Credentials are created for each run and expire after 10 minutes. See [docs/AUTOMATION.md](docs/AUTOMATION.md).
 
@@ -18,9 +18,9 @@ Credentials are created for each run and expire after 10 minutes. See [docs/AUTO
 
 | Machine | Specs | Role |
 |---|---|---|
-| **ops01** (192.168.0.102), was docker01 | Ubuntu 26.04.1, 4 GB RAM, 2+ CPU | Operations: **k3s server** (Kubernetes control plane), GitHub Actions self-hosted runner, OpenBao (secrets vault), Ansible. **Runs no app pods** |
-| **prd01** (192.168.0.103), was linux01 | Ubuntu 26.04.1, 2 GB RAM, 2+ CPU | **k3s agent, PRD only**: production copy of every app |
-| **dev01** (192.168.0.104), new | Ubuntu 26.04.1, 2 GB RAM, 2+ CPU | **k3s agent, DEV only**: development copy of every app |
+| **ops01** (192.168.0.102), was docker01 | Ubuntu 26.04.1, 4 GB RAM, 4 vCPU | Operations: **k3s server** (Kubernetes control plane), GitHub Actions self-hosted runner, OpenBao (secrets vault), Ansible. **Runs no app pods** |
+| **prd01** (192.168.0.103), was linux01 | Ubuntu 26.04.1, 2 GB RAM, 4 vCPU | **k3s agent, PRD only**: production copy of every app |
+| **dev01** (192.168.0.104), new | Ubuntu 26.04.1, 2 GB RAM, 4 vCPU | **k3s agent, DEV only**: development copy of every app |
 
 DEV and PRD are separated by **node and namespace**: each app has `<app>-dev` and `<app>-prd` namespaces, and
 Kubernetes forces their pods onto dev01 and prd01 respectively (details in [docs/K3S.md](docs/K3S.md)).
@@ -72,7 +72,7 @@ k3s ports between the nodes: 6443/tcp (Kubernetes API), 8472/udp (Flannel VXLAN 
 | **Continuous integration** | GitHub Actions (GitHub-hosted runners) | `ubuntu-24.04` image | Cloud | Every PR: lint, unit tests, integration tests, security scans. After merge: the same tests, then build and publish images | [`.github/workflows/`](.github/workflows/) |
 | **Testing** | Python `unittest` (standard library), shell integration tests | n/a | GitHub-hosted runners, then the cluster | Unit tests per app; integration test against the built container; smoke test through the Ingress after each DEV and PRD deploy | [`scripts/unit-test.sh`](scripts/unit-test.sh), [`integration-test.sh`](scripts/integration-test.sh) |
 | **Security scanning** | Trivy (Apache-2.0, free) | 0.76.2, binary pinned by SHA-256 | GitHub-hosted runners | Secrets, misconfigurations (Dockerfiles, Kubernetes, Ansible) and vulnerabilities in the repo and in every image before it's published | [`scripts/security-scan.sh`](scripts/security-scan.sh) |
-| **Environments & approvals** | GitHub Environments `dev`, `prd`, `platform` | n/a | Cloud | `dev`: no approval. `prd` and `platform`: a human approves before the job starts | Repo settings (by hand) |
+| **Environments & approvals** | GitHub Environments `dev`, `prd`, `platform` | n/a | Cloud | `dev`: no approval. `prd` and `platform`: a person approves before the job starts | Repo settings (by hand) |
 | **Continuous deployment** | GitHub Actions self-hosted runner | 2.338.2 | ops01 | Runs the post-merge jobs inside the home network: applies the playbooks, onboards and deploys apps. Connects **out** to GitHub only; no inbound ports | [`homelab.yml`](.github/workflows/homelab.yml), [`apps.yml`](.github/workflows/apps.yml), [`runner.yml`](ansible/playbooks/runner.yml) |
 | **Configuration management / IaC** | Ansible | from Ubuntu 26.04 repos | ops01 → all VMs | Installs and configures everything on the VMs, idempotently. Run by the homelab pipeline after an approved merge to `ansible/` | [`ansible/`](ansible/) |
 | **Container orchestration** | k3s (Kubernetes) | v1.37.2+k3s1 | ops01 = server, prd01 / dev01 = agents | Runs app pods, restarts failed ones; keeps DEV pods on dev01 and PRD pods on prd01 | [`k3s.yml`](ansible/playbooks/k3s.yml), [K3S.md](docs/K3S.md) |
@@ -94,12 +94,12 @@ effectively root access.
 
 | Layer | Control |
 |---|---|
-| Code | Every change via pull request; the `quality` check (lint, tests, scans) required; only humans merge |
+| Code | Every change via pull request; the `quality` check (lint, tests, scans) required; only people merge |
 | Pipeline | PR checks run on GitHub's runners, never on the homelab; fork PR workflows need approval; per-run tokens with minimum permissions; OpenBao trusts only `homelab.yml` / `apps.yml` on `main` of this repo, and gives PRD or admin credentials only to jobs whose GitHub environment (`prd`, `platform`) was approved |
 | Runner | Runs as non-root `gha-runner` (not in the `docker` group); reserved for post-merge jobs |
-| VMs | The pipeline's `automation` user accepts only OpenBao-signed 10-minute SSH certificates; humans' sudo still requires a password; Ansible uses classic `sudo.ws` (see [`ansible.cfg`](ansible/ansible.cfg)) |
+| VMs | The pipeline's `automation` user accepts only OpenBao-signed 10-minute SSH certificates; people's sudo still requires a password; Ansible uses classic `sudo.ws` (see [`ansible.cfg`](ansible/ansible.cfg)) |
 | Kubernetes | Admin kubeconfig on ops01 only (mode 0600); each app has a separate `deployer` per environment (no secrets, no deletes, one namespace); a DEV deployer can't touch PRD; PodNodeSelector keeps DEV pods on dev01 and PRD pods on prd01; app pods run non-root with read-only filesystems and no capabilities |
-| Secrets | OpenBao on loopback only, TLS; root token revoked after setup; recovery keys held by the human; auto-unseal key on ops01 (backed up by the human) |
+| Secrets | OpenBao on loopback only, TLS; root token revoked after setup; recovery keys held by the owner; auto-unseal key on ops01 (backed up by the owner) |
 | **Accepted trade-off** | **An approved homelab run can change anything** on the VMs and in the cluster. The review before merge, plus the approval, is the control. |
 | Supply chain | No `latest` tags anywhere; downloads verified by checksum or digest; no `curl \| sh` install scripts; Trivy installed as a pinned binary, not through a third-party Action |
 
@@ -132,7 +132,7 @@ flowchart LR
     A["Change on a branch"] --> B["Pull request"]
     B --> C["CI on GitHub runners: lint, unit tests, integration tests, security scans"]
     C -->|"fails"| A
-    C -->|"passes"| D["Human review and merge"]
+    C -->|"passes"| D["Review and merge"]
     D --> E{"What changed?"}
     E -->|"ansible files"| F["Approval: platform"]
     F --> F2["Ansible playbooks on all VMs"]
@@ -145,7 +145,7 @@ flowchart LR
 | Stage | Where it runs | Approval? | What it does |
 |---|---|---|---|
 | **1. PR checks** ([`pr-checks.yml`](.github/workflows/pr-checks.yml)) | GitHub-hosted | No | Lint (yamllint, ansible-lint, shellcheck), Trivy repo scan, and per changed app: unit tests, image build, integration test against the container, image scan. One summary check, `quality`, must pass before merge |
-| **2. Review and merge** | GitHub | **Human** | Only humans merge; direct pushes to `main` are blocked |
+| **2. Review and merge** | GitHub | **Person** | Only people merge; direct pushes to `main` are blocked |
 | **3. Apply homelab changes** ([`homelab.yml`](.github/workflows/homelab.yml)) | ops01 runner | **Yes** (`platform`) | 10-minute SSH certificate from OpenBao; runs `base.yml`, `k3s.yml`, `openbao.yml`, `automation-access.yml` on all VMs |
 | **4. Test, scan and build apps** ([`apps.yml`](.github/workflows/apps.yml)) | GitHub-hosted | No | Unit tests and repo scan again on the merged code; build, integration test, image scan; only then push to GHCR |
 | **5. Onboard new apps** | ops01 runner | **Yes** (`platform`) | Only for apps not set up yet: `<app>-dev` / `<app>-prd` namespaces, deployer accounts, OpenBao roles |
@@ -167,7 +167,7 @@ Design choices:
 ## Layout
 
 ```
-ansible/              Ansible config, inventories (hosts.ini for humans, automation.ini for the pipeline), playbooks
+ansible/              Ansible config, inventories (hosts.ini for you, automation.ini for the pipeline), playbooks
 apps/                 Projects built and run on the homelab (not part of it), e.g. apps/hpa-demo
 scripts/              Pipeline and demo logic (workflow YAML only calls these)
 .github/workflows/    Thin CI/CD wrappers

@@ -1,4 +1,4 @@
-# Homelab Bootstrap (one-time, done by the human)
+# Homelab Bootstrap (one-time, done by you)
 
 > These are the first-time steps for a brand-new homelab: GitHub settings, SSH and the runner.
 > After them, run the automation bootstrap in [AUTOMATION.md](AUTOMATION.md). From then on, merging a pull request
@@ -10,7 +10,7 @@ Every step that involves a password, key, or token is yours to do. The agent nev
 ## Before you start
 
 Three VMs (Hyper-V, Ubuntu 26.04.1 LTS). Sizes on the author's homelab: ops01 4 GB RAM, prd01 and dev01 2 GB each,
-2 or more CPUs each, Hyper-V Dynamic Memory off (Kubernetes plans around the memory it sees at start).
+4 vCPU each (2 is enough), Hyper-V Dynamic Memory off (Kubernetes plans around the memory it sees at start).
 Minimums and why: k3s needs 2 GB for a server and 512 MB for an agent, plus the OS and your apps.
 `base.yml` sets the hostnames from the inventory.
 
