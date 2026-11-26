@@ -161,7 +161,11 @@ namespace `hpa-demo`); the homelab now runs DEV on dev01 and PRD on prd01, in `h
 ## How it's built and deployed (on the author's homelab)
 
 hpa-demo uses the homelab's generic apps pipeline, [`.github/workflows/apps.yml`](../../.github/workflows/apps.yml),
-like any app under `apps/`. Merging a change under `apps/hpa-demo/` into `main`:
+like any app under `apps/`.
+
+> **Deploys are switched off for now** ([`deploy.disabled`](deploy.disabled)): steps 1 and 2 run, steps 3 and 4 don't.
+
+Merging a change under `apps/hpa-demo/` into `main`:
 
 1. **Test and scan** (GitHub-hosted runners): unit tests in [`tests/test_app.py`](tests/test_app.py), Trivy scan of the repo.
 2. **Build** (GitHub-hosted runner): [`scripts/build-image.sh`](../../scripts/build-image.sh) builds

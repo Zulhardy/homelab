@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # changed-apps.sh push BEFORE AFTER   -> JSON list of apps to build/deploy for a push
 # changed-apps.sh dispatch APP|all    -> JSON list for a manual run
+# changed-apps.sh deployable JSON     -> the same list without apps that have deploying switched off
 #
+# Switching deploys off for an app: add the file apps/NAME/deploy.disabled (its text says why). The app is
+# still tested, scanned and built, but not onboarded and not deployed to DEV or PRD. Delete the file to switch
+# deploying back on.
 # An "app" is any folder apps/NAME that has a k8s/ folder.
 # If shared files changed (anything outside apps/), every app is rebuilt/redeployed.
 # Deleted apps are ignored: removing a running app is a manual, irreversible step.
@@ -34,6 +38,10 @@ case "${mode}" in
         [ -d "apps/${a}/k8s" ] && echo "${a}"
       done | to_json
     fi
+    ;;
+  deployable)
+    echo "${2:?missing JSON list}" | python3 -I -c 'import json,sys; [print(a) for a in json.load(sys.stdin)]' |
+      while read -r a; do [ -f "apps/${a}/deploy.disabled" ] || echo "${a}"; done | to_json
     ;;
   *) echo "unknown mode ${mode}" >&2; exit 1 ;;
 esac

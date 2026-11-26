@@ -176,10 +176,18 @@ bao delete kubernetes/roles/hpa-demo-deployer >/dev/null 2>&1 || true
 echo "== 7. automation user + SSH certificate trust on every VM"
 ap automation-access.yml
 
-echo "== 8. Onboard existing apps"
+# Apps to onboard / test: every apps/*/k8s, minus those with deploying switched off (apps/<app>/deploy.disabled).
+deploy_apps=()
 for d in apps/*/k8s; do
-  [ -d "${d}" ] && scripts/onboard-app.sh "$(basename "$(dirname "${d}")")"
+  [ -d "${d}" ] || continue
+  a="$(basename "$(dirname "${d}")")"
+  if [ -f "apps/${a}/deploy.disabled" ]; then echo "  ${a}: deploying switched off (apps/${a}/deploy.disabled), not onboarded"; continue; fi
+  deploy_apps+=("${a}")
 done
+
+echo "== 8. Onboard existing apps"
+for a in "${deploy_apps[@]}"; do scripts/onboard-app.sh "${a}"; done
+[ "${#deploy_apps[@]}" -gt 0 ] || echo "  No apps to onboard."
 
 echo "== 9. Self-tests"
 ssh-keygen -q -t ed25519 -N '' -f "${work}/id"
@@ -189,9 +197,8 @@ for h in 127.0.0.1 192.168.0.103 192.168.0.104; do
           "automation@${h}" 'sudo -n true && echo "$(hostname): automation can sudo"' 2>&1)" || true
   printf '  %-16s %s\n' "${h}" "${out}"
 done
-for d in apps/*/k8s; do
-  [ -d "${d}" ] || continue
-  app="$(basename "$(dirname "${d}")")"
+[ "${#deploy_apps[@]}" -gt 0 ] || echo "  No onboarded apps: DEV/PRD deployer tests skipped (they run once an app is onboarded)."
+for app in "${deploy_apps[@]}"; do
   for env in dev prd; do
     other="$([ "${env}" = dev ] && echo prd || echo dev)"
     ns="${app}-${env}"

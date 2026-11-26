@@ -119,6 +119,7 @@ apps/<name>/
   tests/test_*.py         REQUIRED unit tests (Python unittest), or an executable tests/unit.sh for other languages
   tests/integration.sh    REQUIRED if there is a Dockerfile or an Ingress: integration.sh BASE_URL [HOST_HEADER]
   README.md
+  deploy.disabled         optional: if present, the app is tested, scanned and built, but NOT onboarded or deployed
 ```
 
 | Rule | Why |
@@ -132,7 +133,16 @@ apps/<name>/
 | Allowed object types: Deployment, StatefulSet, Service, ConfigMap, PersistentVolumeClaim, Ingress, HorizontalPodAutoscaler, Job | That's what the `deployer` accounts may create ([`app-deployer-rbac.yaml.tmpl`](../ansible/files/k8s/app-deployer-rbac.yaml.tmpl)). Need more, e.g. Secrets? Change that template in a PR |
 | No deletes | The deployer can't delete anything. Removing objects or a whole app is a manual step on purpose |
 
-See [`apps/hpa-demo`](../apps/hpa-demo/) for a complete example.
+See [`apps/hpa-demo`](../apps/hpa-demo/) for a complete example. Its deploys are currently switched off
+(`apps/hpa-demo/deploy.disabled`).
+
+### Switching deploys off or on
+
+- **Off**: add `apps/<name>/deploy.disabled` (a short note saying why) in a pull request. Tests, scans and the
+  image build still run; onboarding and the DEV/PRD deploys are skipped. Anything already running stays as it is
+  (removing it is a manual step).
+- **On**: delete that file in a pull request. After merging, approve the onboarding once (`platform`); DEV deploys
+  automatically, PRD after approval.
 
 ## What the pipelines may do (accepted trade-offs)
 

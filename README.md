@@ -120,7 +120,7 @@ All apps use the same pipeline, [`apps.yml`](.github/workflows/apps.yml). To add
 
 | Project | What it is | Folder and docs | DEV / PRD address | Package |
 |---|---|---|---|---|
-| **hpa-demo** | Load balancing and autoscaling on Kubernetes (1 → 5 → 1 pods under load). Runs on any Kubernetes cluster with metrics-server. | [apps/hpa-demo](apps/hpa-demo/README.md) | `hpa-demo.192.168.0.104.nip.io` / `hpa-demo.192.168.0.103.nip.io` | [`ghcr.io/zulhardy/hpa-demo`](https://github.com/zulhardy/homelab/pkgs/container/hpa-demo) |
+| **hpa-demo** | Load balancing and autoscaling on Kubernetes (1 → 5 → 1 pods under load). Runs on any Kubernetes cluster with metrics-server. | [apps/hpa-demo](apps/hpa-demo/README.md) | Deploys **switched off** for now ([`deploy.disabled`](apps/hpa-demo/deploy.disabled)); when on: `hpa-demo.192.168.0.104.nip.io` / `hpa-demo.192.168.0.103.nip.io` | [`ghcr.io/zulhardy/hpa-demo`](https://github.com/zulhardy/homelab/pkgs/container/hpa-demo) |
 
 ## How the CI/CD pipeline works
 

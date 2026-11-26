@@ -44,6 +44,9 @@ case "${1:-}" in
   deploy)
     app="${2:?missing APP}"; env="${3:?missing ENV}"
     env_check "${env}"
+    if [ -f "apps/${app}/deploy.disabled" ]; then
+      echo "Deploying ${app} is switched off (apps/${app}/deploy.disabled). Not deploying." >&2; exit 1
+    fi
     if [ "${env}" = "prd" ]; then echo "== Approval gate"; require_protected_environment prd; fi
     echo "== OpenBao login (apps-${env})"; openbao_login "apps-${env}"
     openbao_k8s_token "${env}-${app}" "${app}-${env}" "${work}/deployer.jwt"
