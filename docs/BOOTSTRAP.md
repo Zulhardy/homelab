@@ -34,9 +34,17 @@ sudo apt update
 sudo apt install -y ansible git
 
 # SSH key for VM1 -> VM2 (this is YOUR key as the admin; protect it with a passphrase)
-ssh-keygen -t ed25519 -C "vm1-admin"
-ssh-copy-id zulhardy@192.168.0.103
-ssh zulhardy@192.168.0.103 'hostname'   # should print VM2's hostname without asking for a password
+ssh-keygen -t ed25519 -C "docker01-admin"
+ssh-copy-id zulhardy@192.168.0.103        # asks for linux01's account password (last time it will)
+
+# Load the key into ssh-agent so neither you nor Ansible gets the passphrase prompt.
+# Repeat these two lines each time you log in to docker01.
+eval "$(ssh-agent -s)"
+ssh-add                                   # type the key's passphrase once
+
+ssh zulhardy@192.168.0.103 'hostname'     # should print: linux01, with no prompt
+# If it asks "Enter passphrase for key ...", the agent isn't loaded: run the two lines above.
+# If it asks "zulhardy@192.168.0.103's password", ssh-copy-id didn't work: run it again.
 
 # Allow Ansible to use sudo on VM2 (you'll type VM2's sudo password with -K below)
 ```
