@@ -14,6 +14,7 @@
     - name: Install CI tools used by the pipelines
       ansible.builtin.apt:
         name:
+          - acl # provides setfacl; Ansible needs it to run tasks as the unprivileged runner user
           - ansible-lint
           - yamllint
           - git
