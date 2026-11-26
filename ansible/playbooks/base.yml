@@ -13,9 +13,11 @@
     - name: Stop if a host is not Ubuntu 26.04 (pinned versions are built for it)
       ansible.builtin.assert:
         that:
-          - ansible_distribution == "Ubuntu"
-          - ansible_distribution_version == "26.04"
-        fail_msg: "This homelab targets Ubuntu 26.04; {{ inventory_hostname }} is {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - ansible_facts["distribution"] == "Ubuntu"
+          - ansible_facts["distribution_version"] == "26.04"
+        fail_msg: >-
+          This homelab targets Ubuntu 26.04; {{ inventory_hostname }} is
+          {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
 
     - name: Map the new hostname to 127.0.1.1 first (keeps sudo from complaining during the rename)
       ansible.builtin.lineinfile:
