@@ -67,11 +67,60 @@ bao status
 
 Exit codes: `0` = unsealed, `2` = sealed, `1` = error (e.g. the service isn't running: `sudo systemctl status openbao`).
 
+## Connect GitHub and Kubernetes (one time, by you)
+
+This is what lets the deploy pipeline get a Kubernetes login **without storing one**:
+
+```mermaid
+sequenceDiagram
+    participant J as Deploy job (runner on docker01)
+    participant G as GitHub OIDC
+    participant B as OpenBao (127.0.0.1:8200)
+    participant K as k3s API
+    J->>G: request an ID token (audience openbao-homelab)
+    G-->>J: signed token: repo, branch, workflow
+    J->>B: log in with that token (role hpa-demo-deploy)
+    B->>B: check repo id, main branch, workflow file, audience
+    B-->>J: OpenBao session, 10 minutes
+    J->>B: ask for a hpa-demo deployer login
+    B->>K: create a token for the deployer account
+    K-->>B: token valid 10 minutes
+    B-->>J: Kubernetes token
+    J->>K: deploy to namespace hpa-demo only
+```
+
+Run on docker01, in a terminal where `bao status` works and shows `Sealed false`:
+
+```bash
+cd ~/homelab && git pull
+scripts/openbao-setup.sh
+```
+
+It asks for the **root token** (input hidden; paste it from your password manager). At the end it runs a
+self-test with a real 5-minute deployer token. Expected:
+
+```
+  can patch deployments in hpa-demo:               yes
+  can read secrets in hpa-demo:                    no
+  can patch deployments in kube-system:            no
+  can create namespaces:                           no
+```
+
+What it creates:
+
+| Where | What | Can do |
+|---|---|---|
+| Kubernetes, namespace `openbao` | ServiceAccount `openbao-broker` + its token (stored inside OpenBao) | Only create tokens for hpa-demo's `deployer` |
+| Kubernetes, namespace `hpa-demo` | ServiceAccount `deployer` + Role | Create/update the app's Deployment, Service, Ingress, HPA; read pods. No secrets, no deletes, nothing outside `hpa-demo` |
+| OpenBao | `kubernetes/` secrets engine, role `hpa-demo-deployer` | Mints deployer tokens: 10 minutes by default, 30 at most |
+| OpenBao | `jwt-github/` login, role `hpa-demo-deploy` | Accepts only GitHub tokens from repo ID 1473136403, branch `main`, workflow `hpa-demo-image.yml`, push or manual run, audience `openbao-homelab` |
+| OpenBao | policy `hpa-demo-deploy` | The GitHub login may only ask for a hpa-demo deployer token |
+
 ## Root token
 
-You'll need the root token once, for the next step (configuring GitHub login and Kubernetes credentials).
-After that it should be **revoked**. A new one can be generated later from the unseal keys if ever needed
-(`bao operator generate-root`).
+After the self-test shows `yes, no, no, no`, answer **y** when `scripts/openbao-setup.sh` asks
+"Revoke the root token now?". Nothing needs it day to day. You can then delete it from your password manager too. If you ever need admin access again, generate a new
+root token from 2 of the unseal keys (`bao operator generate-root`).
 
 ## Optional: the web UI
 

@@ -1,0 +1,23 @@
+# The identity OpenBao uses to talk to Kubernetes ("credential broker").
+# It holds the only long-lived Kubernetes credential in the deploy path, and it is stored inside OpenBao.
+# By itself it can do nothing: each project grants it one permission, "mint tokens for my deployer account"
+# (see apps/<project>/k8s/05-deploy-rbac.yaml).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: openbao
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openbao-broker
+  namespace: openbao
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: openbao-broker-token
+  namespace: openbao
+  annotations:
+    kubernetes.io/service-account.name: openbao-broker
+type: kubernetes.io/service-account-token
