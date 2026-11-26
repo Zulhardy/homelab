@@ -93,6 +93,9 @@
           export BAO_ADDR="{{ openbao_addr }}"
           export BAO_CACERT=/etc/openbao/tls-ca.crt
 
+    - name: Apply pending restarts now (so the status check below sees the new certificate)
+      ansible.builtin.meta: flush_handlers
+
     - name: Enable and start OpenBao
       ansible.builtin.systemd_service:
         name: openbao
