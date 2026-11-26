@@ -119,17 +119,19 @@
         mode: "0700"
 
     - name: Read host keys (the control node via 127.0.0.1, the others via their IP)
-      ansible.builtin.command: "ssh-keyscan -t ed25519 {{ '127.0.0.1' if item in groups['control'] else hostvars[item].k3s_node_ip }}"
+      ansible.builtin.command: "ssh-keyscan -q -t ed25519 {{ '127.0.0.1' if item in groups['control'] else hostvars[item].k3s_node_ip }}"
       loop: "{{ groups['homelab'] }}"
       register: host_keys
       changed_when: false
       check_mode: false
 
+    # Only the key line ("<host> ssh-ed25519 AAAA..."): newer ssh-keyscan versions also print a
+    # "# <host>:22 SSH-2.0-..." comment line, which known_hosts rejects.
     - name: Write the runner's known_hosts
       ansible.builtin.known_hosts:
         path: "/home/{{ runner_user }}/.ssh/known_hosts"
-        name: "{{ item.stdout.split()[0] }}"
-        key: "{{ item.stdout }}"
+        name: "{{ (item.stdout_lines | reject('match', '^\\s*(#|$)') | first).split()[0] }}"
+        key: "{{ item.stdout_lines | reject('match', '^\\s*(#|$)') | first }}"
         state: present
       loop: "{{ host_keys.results }}"
       loop_control:
