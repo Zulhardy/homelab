@@ -1,4 +1,4 @@
-# Agent Rules — DevOps Lab (Phase 1: Homelab)
+# Agent Rules — Homelab Workspace
 
 Source: adapted from zulhardy/infrastructure-agents-guide
 (Ch 5 Credential Management, Ch 7 Change Control, Ch 8 Policy & Guardrails, Ch 13 Risk Framework).
@@ -6,11 +6,16 @@ Source: adapted from zulhardy/infrastructure-agents-guide
 These rules are the *prompt-level* layer. The guide treats this layer as the weakest one,
 so each rule is also enforced structurally where possible (see "Enforced by").
 
-## Phases
+## Purpose
 
-- Phase 1 (now): Homelab — 2 Ubuntu VMs on Hyper-V, code on GitHub (PUBLIC repo), GitHub Actions self-hosted runner on docker01.
-- Phase 2 (later): Azure Repos + Azure Pipelines + temporary Azure resources via Terraform.
-  Azure-specific rules will be added at that point.
+- This repo is the **homelab workspace**: 2 Ubuntu VMs on Hyper-V, code on GitHub (PUBLIC repo),
+  GitHub Actions self-hosted runner on docker01. It stays at home.
+- The homelab is used to **author and test a group capstone project** (a web app with a database,
+  hosted on Azure). The homelab is NOT the capstone project.
+- The capstone project lives in a **separate repository** (name not decided yet): GitHub for now,
+  Azure DevOps later, running on temporary Azure resources. Its rules (including Azure/Terraform rules)
+  belong in that repository's own CLAUDE.md, not here.
+- Do not put capstone project code in this repo.
 
 ## Autonomy level
 
@@ -51,8 +56,8 @@ so each rule is also enforced structurally where possible (see "Enforced by").
 ## Lab conventions
 
 - VM1 = docker01 (192.168.0.102): control node (Ansible, self-hosted runner, image builds).
-- VM2 = linux01 (192.168.0.103): app runtime.
-- Pipeline logic lives in `scripts/`; workflow YAML stays thin (eases the later move to Azure Pipelines).
+- VM2 = linux01 (192.168.0.103): runs the capstone project's app and database locally for testing.
+- Pipeline logic lives in `scripts/`; workflow YAML stays thin.
 - Pin versions (runner version + checksum, action commit SHAs). No `latest`.
 - Branch naming: `feat/<short-name>`, `fix/<short-name>`, `chore/<short-name>`
 
