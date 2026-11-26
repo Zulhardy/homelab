@@ -42,7 +42,7 @@ done
 [ -n "${BAO_ADDR:-}" ] || source /etc/profile.d/openbao.sh
 # shellcheck source=scripts/lib/homelab-apps.sh
 source scripts/lib/homelab-apps.sh
-apps_list="$(homelab_apps)"  # fails here, before any change, if the list is broken
+apps_list="$(homelab_apps inventory/hosts.ini)"  # fails here, before any change, if the list is broken
 kubectl auth can-i '*' '*' --all-namespaces >/dev/null 2>&1 || { echo "Your kubectl isn't cluster admin (check ~/.kube/config)." >&2; exit 1; }
 
 work="$(mktemp -d)"
