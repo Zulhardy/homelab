@@ -9,8 +9,15 @@ image="$(scripts/hpa-demo-image-tag.sh)"
 echo "Building ${image}"
 
 echo "${GITHUB_TOKEN:?GITHUB_TOKEN not set}" | docker login ghcr.io -u "${GITHUB_ACTOR:?GITHUB_ACTOR not set}" --password-stdin
+trap 'docker logout ghcr.io >/dev/null' EXIT
+
+# The tag is the last commit that changed the app. If only manifests or scripts changed, that image
+# already exists: reuse it instead of building a different image under the same tag.
+if docker manifest inspect "${image}" >/dev/null 2>&1; then
+  echo "${image} already exists, not rebuilding."
+  exit 0
+fi
+
 docker build --platform linux/amd64 -t "${image}" apps/hpa-demo/app
 docker push "${image}"
-docker logout ghcr.io
-
 echo "Pushed ${image}"

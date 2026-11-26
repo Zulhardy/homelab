@@ -116,6 +116,18 @@ What it creates:
 | OpenBao | `jwt-github/` login, role `hpa-demo-deploy` | Accepts only GitHub tokens from repo ID 1473136403, branch `main`, workflow `hpa-demo-image.yml`, push or manual run, audience `openbao-homelab` |
 | OpenBao | policy `hpa-demo-deploy` | The GitHub login may only ask for a hpa-demo deployer token |
 
+## Automatic deploys (how it's used)
+
+The deploy job in [`.github/workflows/hpa-demo-image.yml`](../.github/workflows/hpa-demo-image.yml) runs
+[`scripts/ci-deploy-hpa-demo.sh`](../scripts/ci-deploy-hpa-demo.sh) on docker01's runner after every merge that
+changes hpa-demo. It follows the sequence above, then revokes its OpenBao session and deletes its temporary
+kubeconfig. If OpenBao is sealed, the job fails with "OpenBao is sealed": unseal it and re-run the job
+(Actions tab → the failed run → **Re-run jobs**).
+
+The GitHub login is pinned to that workflow **file name**. Renaming or moving the file stops deploys until
+`WORKFLOW_REF` in `scripts/openbao-setup.sh` is updated and the script is re-run (needs a new root token,
+`bao operator generate-root`).
+
 ## Root token
 
 After the self-test shows `yes, no, no, no`, answer **y** when `scripts/openbao-setup.sh` asks

@@ -26,7 +26,10 @@ case "${1:-}" in
   deploy)
     image="${HPA_DEMO_IMAGE:-$(scripts/hpa-demo-image-tag.sh)}"
     echo "Deploying ${image}"
-    kubectl apply -f "${k8s}/00-namespace.yaml"
+    # The pipeline's deployer account can't create namespaces (by design); an admin created it already.
+    if kubectl auth can-i create namespaces >/dev/null 2>&1; then
+      kubectl apply -f "${k8s}/00-namespace.yaml"
+    fi
     sed "s|ghcr.io/zulhardy/hpa-demo:REPLACED_BY_SCRIPT|${image}|" "${k8s}/10-deployment.yaml" | kubectl apply -f -
     kubectl apply -f "${k8s}/20-service.yaml" -f "${k8s}/40-hpa.yaml"
     if [ "${SKIP_INGRESS:-0}" != "1" ]; then

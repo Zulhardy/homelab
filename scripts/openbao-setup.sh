@@ -104,7 +104,7 @@ k() {
 printf '  %-48s %s\n' "can patch deployments in hpa-demo:"   "$(k auth can-i patch deployments -n hpa-demo || true)"
 printf '  %-48s %s\n' "can read secrets in hpa-demo:"        "$(k auth can-i get secrets -n hpa-demo || true)"
 printf '  %-48s %s\n' "can patch deployments in kube-system:" "$(k auth can-i patch deployments -n kube-system || true)"
-printf '  %-48s %s\n' "can create namespaces:"               "$(k auth can-i create namespaces || true)"
+printf '  %-48s %s\n' "can create namespaces:"               "$(k auth can-i create namespaces 2>/dev/null || true)"
 echo "  Expected: yes, no, no, no"
 
 echo

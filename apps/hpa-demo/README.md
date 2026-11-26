@@ -154,16 +154,21 @@ A 2-node k3s cluster (docker01 and linux01, 4 CPU / 8 GB each).
 | `scripts/hpa-demo-image-tag.sh` says no commit found | The repo was cloned with `--depth 1` | Clone normally (full history), or set `HPA_DEMO_IMAGE` yourself |
 | Pods never go above 1 | Not enough load, or the cluster is out of CPU | Raise `replicas` in the load generator; check `kubectl describe hpa -n hpa-demo` |
 
-## How the image is built
+## How it's built and deployed (on the author's homelab)
 
-Merging a change under `app/` into `main` runs
-[`.github/workflows/hpa-demo-image.yml`](../../.github/workflows/hpa-demo-image.yml) on GitHub's runners:
+Merging a change under `apps/hpa-demo/` into `main` runs
+[`.github/workflows/hpa-demo-image.yml`](../../.github/workflows/hpa-demo-image.yml):
 
-1. [`scripts/hpa-demo-image-tag.sh`](../../scripts/hpa-demo-image-tag.sh) works out the tag:
-   `sha-<last commit that changed apps/hpa-demo/app>`.
-2. [`scripts/build-image.sh`](../../scripts/build-image.sh) builds the image and pushes it to
-   `ghcr.io/zulhardy/hpa-demo:<tag>`, using GitHub's short-lived per-run token. No stored secrets.
-3. The deploy script uses the same tag script, so it always deploys exactly the image that was built.
+1. **Build** (GitHub-hosted runner): [`scripts/hpa-demo-image-tag.sh`](../../scripts/hpa-demo-image-tag.sh) works out
+   the tag `sha-<last commit that changed apps/hpa-demo/app>`, and [`scripts/build-image.sh`](../../scripts/build-image.sh)
+   builds and pushes `ghcr.io/zulhardy/hpa-demo:<tag>` with GitHub's short-lived per-run token. If that image
+   already exists (only manifests changed), it's reused.
+2. **Deploy** (self-hosted runner on docker01): [`scripts/ci-deploy-hpa-demo.sh`](../../scripts/ci-deploy-hpa-demo.sh)
+   logs in to OpenBao with GitHub's OIDC token, receives a Kubernetes token that expires after 10 minutes and only
+   works in the `hpa-demo` namespace, then runs `scripts/hpa-demo.sh deploy` and waits for the rollout.
+
+Who may deploy, and with which permissions, is in [`k8s/05-deploy-rbac.yaml`](k8s/05-deploy-rbac.yaml).
+You don't need any of this to *try* the demo on your own cluster: `scripts/hpa-demo.sh deploy` uses your own kubeconfig.
 
 ## Security choices
 
