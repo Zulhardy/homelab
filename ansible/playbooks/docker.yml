@@ -1,0 +1,109 @@
+---
+- name: Install Docker (official repo, pinned versions) on all homelab VMs
+  hosts: homelab
+  become: true
+  tasks:
+    - name: Stop if a host is not Ubuntu 26.04 (pinned versions are built for it)
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version == "26.04"
+        fail_msg: "Pinned Docker versions target Ubuntu 26.04; this host is {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Remove conflicting Ubuntu Docker packages if present
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose
+          - docker-compose-v2
+          - podman-docker
+          - containerd
+          - runc
+        state: absent
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - gnupg
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Check for an existing Docker repo file (older docker.list style)
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/docker.list
+      register: docker_list_file
+
+    - name: Create keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker signing key
+      ansible.builtin.get_url:
+        url: "{{ docker_gpg_url }}"
+        dest: /etc/apt/keyrings/docker.asc
+        mode: "0644"
+      check_mode: false # always fetch the key so --check can still verify it
+
+    - name: Read key fingerprint
+      ansible.builtin.command: gpg --show-keys --with-colons /etc/apt/keyrings/docker.asc
+      register: docker_key_info
+      changed_when: false
+      check_mode: false
+
+    - name: Verify key fingerprint
+      ansible.builtin.assert:
+        that:
+          - docker_gpg_fingerprint in docker_key_info.stdout
+        fail_msg: "Docker signing key fingerprint does not match the expected value. Stopping."
+
+    - name: Add Docker apt repository (deb822 format)
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/docker.sources
+        mode: "0644"
+        content: |
+          Types: deb
+          URIs: {{ docker_repo_url }}
+          Suites: {{ ansible_distribution_release }}
+          Components: stable
+          Signed-By: /etc/apt/keyrings/docker.asc
+      when: not docker_list_file.stat.exists
+
+    - name: Release apt holds so pinned versions can be installed
+      ansible.builtin.dpkg_selections:
+        name: "{{ item.split('=')[0] }}"
+        selection: install
+      loop: "{{ docker_packages }}"
+
+    - name: Install pinned Docker packages
+      ansible.builtin.apt:
+        name: "{{ docker_packages }}"
+        state: present
+        update_cache: true
+        allow_downgrade: true
+
+    - name: Hold Docker packages at the pinned versions
+      ansible.builtin.dpkg_selections:
+        name: "{{ item.split('=')[0] }}"
+        selection: hold
+      loop: "{{ docker_packages }}"
+
+    - name: Enable and start Docker
+      ansible.builtin.systemd_service:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Verify Docker works
+      ansible.builtin.command: docker version --format '{{ "{{" }}.Server.Version{{ "}}" }}'
+      register: docker_version_out
+      changed_when: false
+      check_mode: false
+      ignore_errors: "{{ ansible_check_mode }}" # Docker may not be installed yet during a dry run
+
+    - name: Show Docker version
+      ansible.builtin.debug:
+        msg: "Docker {{ docker_version_out.stdout }} on {{ inventory_hostname }}"

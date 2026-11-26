@@ -1,0 +1,27 @@
+name: PR checks
+
+# Runs on GitHub-hosted runners (free for public repos), never on docker01.
+# The self-hosted runner is reserved for workflows triggered by pushes to main,
+# i.e. only after a human has reviewed and merged.
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned lint tools
+        run: pip install --user ansible-core==2.22.0 ansible-lint==26.11.1 yamllint==1.38.0
+
+      - name: Lint
+        run: bash scripts/lint.sh
