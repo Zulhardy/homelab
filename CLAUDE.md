@@ -55,9 +55,9 @@ so each rule is also enforced structurally where possible (see "Enforced by").
 
 ## Lab conventions
 
-- ops01 (192.168.0.102, was docker01): control node: Ansible, self-hosted runner, OpenBao, k3s control plane.
+- ops01 (192.168.0.102): control node: Ansible, self-hosted runner, OpenBao, k3s control plane.
   No app pods.
-- prd01 (192.168.0.103, was linux01): k3s agent for PRD apps.
+- prd01 (192.168.0.103): k3s agent for PRD apps.
 - dev01 (192.168.0.104): k3s agent for DEV apps (e.g. the capstone project's app and database for testing).
 - Image builds, tests and scans run on GitHub-hosted runners, not on the VMs. Docker is not installed on the VMs.
 - Pipeline logic lives in `scripts/`; workflow YAML stays thin.
