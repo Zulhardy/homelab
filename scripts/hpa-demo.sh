@@ -9,34 +9,23 @@
 #   scripts/hpa-demo.sh status       show everything in the hpa-demo namespace
 #   scripts/hpa-demo.sh delete       remove the whole demo
 #
-# Optional settings (environment variables):
-#   HPA_DEMO_IMAGE   image to deploy (default: the image built by this repo's pipeline for the current commit)
-#   HPA_DEMO_HOST    host name for the Ingress (default: hpa-demo.192.168.0.102.nip.io, the author's homelab)
-#   SKIP_INGRESS=1   don't create the Ingress (for clusters without Traefik, e.g. minikube, kind)
+# Optional settings (environment variables), passed on to scripts/deploy.sh:
+#   APP_IMAGE         image to deploy (default: the image built by this repo's pipeline for the current commit)
+#   APP_INGRESS_HOST  host name for the Ingress (default: hpa-demo.192.168.0.102.nip.io, the author's homelab)
+#   SKIP_INGRESS=1    don't create the Ingress (for clusters without Traefik, e.g. minikube, kind)
+#
+# On the author's homelab, deploys happen automatically after merge (.github/workflows/apps.yml).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 ns=hpa-demo
 k8s=apps/hpa-demo/k8s
-host="${HPA_DEMO_HOST:-hpa-demo.192.168.0.102.nip.io}"
 # busybox:1.37 pinned by digest; same image as the load generator
 busybox="busybox@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec"
 
 case "${1:-}" in
   deploy)
-    image="${HPA_DEMO_IMAGE:-$(scripts/hpa-demo-image-tag.sh)}"
-    echo "Deploying ${image}"
-    # The pipeline's deployer account can't create namespaces (by design); an admin created it already.
-    if kubectl auth can-i create namespaces >/dev/null 2>&1; then
-      kubectl apply -f "${k8s}/00-namespace.yaml"
-    fi
-    sed "s|ghcr.io/zulhardy/hpa-demo:REPLACED_BY_SCRIPT|${image}|" "${k8s}/10-deployment.yaml" | kubectl apply -f -
-    kubectl apply -f "${k8s}/20-service.yaml" -f "${k8s}/40-hpa.yaml"
-    if [ "${SKIP_INGRESS:-0}" != "1" ]; then
-      sed "s|host: REPLACED_BY_SCRIPT|host: ${host}|" "${k8s}/30-ingress.yaml" | kubectl apply -f -
-      echo "Ingress host: http://${host}/"
-    fi
-    kubectl -n "${ns}" rollout status deploy/hpa-demo --timeout=180s
+    scripts/deploy.sh hpa-demo
     ;;
   test)
     # Runs a short-lived pod inside the cluster, so it works without an Ingress or DNS.
@@ -64,7 +53,7 @@ case "${1:-}" in
     kubectl delete namespace "${ns}" --ignore-not-found
     ;;
   *)
-    sed -n '2,16p' "$0"
+    sed -n '2,17p' "$0"
     exit 1
     ;;
 esac

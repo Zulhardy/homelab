@@ -23,8 +23,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: app
-          # The deploy script replaces this with the exact image built by the pipeline.
-          image: ghcr.io/zulhardy/hpa-demo:REPLACED_BY_SCRIPT
+          # scripts/deploy.sh replaces APP_IMAGE with the exact image built for this commit.
+          image: APP_IMAGE
           ports:
             - name: http
               containerPort: 8080

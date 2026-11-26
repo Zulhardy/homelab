@@ -1,7 +1,10 @@
-# The identity OpenBao uses to talk to Kubernetes ("credential broker").
-# It holds the only long-lived Kubernetes credential in the deploy path, and it is stored inside OpenBao.
-# By itself it can do nothing: each project grants it one permission, "mint tokens for my deployer account"
-# (see apps/<project>/k8s/05-deploy-rbac.yaml).
+# Kubernetes identities used through OpenBao. Applied by scripts/bootstrap-automation.sh.
+#
+# openbao-broker   : the account OpenBao itself uses to mint short-lived tokens. Its token is stored inside
+#                    OpenBao. It can do nothing except mint tokens for the accounts that explicitly allow it.
+# homelab-platform : the pipeline's ADMIN account (cluster-admin), used only to onboard new apps
+#                    (namespace + deployer account). The pipeline gets 10-minute tokens for it through OpenBao.
+#                    Accepted trade-off: merging to main can change anything in the cluster.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -21,3 +24,51 @@ metadata:
   annotations:
     kubernetes.io/service-account.name: openbao-broker
 type: kubernetes.io/service-account-token
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: homelab-platform
+  namespace: openbao
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: homelab-platform-cluster-admin
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: homelab-platform
+    namespace: openbao
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: openbao-mint-platform-token
+  namespace: openbao
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: ["homelab-platform"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["homelab-platform"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: openbao-mint-platform-token
+  namespace: openbao
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: openbao-mint-platform-token
+subjects:
+  - kind: ServiceAccount
+    name: openbao-broker
+    namespace: openbao

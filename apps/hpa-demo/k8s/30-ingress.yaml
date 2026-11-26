@@ -1,6 +1,6 @@
 # Load balancing from outside: Traefik (built into k3s) receives traffic on port 80 of both VMs
 # and forwards it to the Service.
-# The host name is filled in by scripts/hpa-demo.sh (HPA_DEMO_HOST). Uses the Traefik ingress built into k3s.
+# scripts/deploy.sh replaces APP_INGRESS_HOST (default: hpa-demo.192.168.0.102.nip.io). Traefik is built into k3s.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -9,7 +9,7 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: REPLACED_BY_SCRIPT
+    - host: APP_INGRESS_HOST
       http:
         paths:
           - path: /

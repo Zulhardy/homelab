@@ -1,0 +1,117 @@
+name: apps
+
+# Build and deploy every app under apps/ after a merge. New apps are onboarded automatically.
+#   detect (GitHub-hosted) : which apps changed (all of them if shared files changed)
+#   build  (GitHub-hosted) : build + push ghcr.io/zulhardy/<app> (skipped if no Dockerfile or image exists)
+#   deploy (docker01)      : OpenBao via GitHub OIDC -> onboard if new (10-minute admin token)
+#                            -> deploy with the app's own 10-minute deployer token -> rollout check
+#
+# Jobs on docker01 run one at a time because there is a single self-hosted runner. No "concurrency" group
+# on purpose: GitHub keeps only one waiting job per group and cancels older waiting ones.
+#
+# NOTE: OpenBao only accepts GitHub tokens from this file (and homelab.yml) on main.
+#       Renaming it breaks deploys until scripts/bootstrap-automation.sh is updated and re-run.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/**"
+      - "ansible/files/k8s/app-deployer-rbac.yaml.tmpl"
+      - "scripts/image-tag.sh"
+      - "scripts/build-image.sh"
+      - "scripts/deploy.sh"
+      - "scripts/onboard-app.sh"
+      - "scripts/changed-apps.sh"
+      - "scripts/ci-apps.sh"
+      - "scripts/lib/**"
+      - ".github/workflows/apps.yml"
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "App to build and deploy (folder name under apps/), or 'all'"
+        required: true
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      apps: ${{ steps.list.outputs.apps }}
+    steps:
+      - name: Checkout (full history, to compare commits)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: List apps to build and deploy
+        id: list
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+          INPUT_APP: ${{ inputs.app }}
+        run: |
+          if [ "${EVENT}" = "workflow_dispatch" ]; then
+            apps="$(bash scripts/changed-apps.sh dispatch "${INPUT_APP}")"
+          else
+            apps="$(bash scripts/changed-apps.sh push "${BEFORE}" "${AFTER}")"
+          fi
+          echo "Apps: ${apps}"
+          echo "apps=${apps}" >> "${GITHUB_OUTPUT}"
+
+  build:
+    needs: detect
+    # Only main: a manual run on an unmerged branch must not publish images.
+    if: github.ref == 'refs/heads/main' && needs.detect.outputs.apps != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.detect.outputs.apps) }}
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io/zulhardy/<app> with the short-lived GITHUB_TOKEN
+    steps:
+      - name: Checkout (full history, needed to compute the image tag)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build and push ${{ matrix.app }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          APP: ${{ matrix.app }}
+        run: bash scripts/build-image.sh "${APP}"
+
+  deploy:
+    needs: [detect, build]
+    if: github.ref == 'refs/heads/main' && needs.detect.outputs.apps != '[]'
+    runs-on: [self-hosted, homelab, docker01]
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        app: ${{ fromJSON(needs.detect.outputs.apps) }}
+    permissions:
+      contents: read
+      id-token: write # lets this job ask GitHub for an OIDC token, which OpenBao checks
+    steps:
+      - name: Checkout (full history, needed to compute the image tag)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Onboard (if new) and deploy ${{ matrix.app }}
+        env:
+          APP: ${{ matrix.app }}
+        run: bash scripts/ci-apps.sh "${APP}"

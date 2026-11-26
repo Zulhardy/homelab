@@ -64,7 +64,7 @@ SKIP_INGRESS=1 scripts/hpa-demo.sh deploy
 ```
 
 Leave out `SKIP_INGRESS=1` if your cluster has Traefik (k3s) and you want to open the app in a browser.
-Then also set `HPA_DEMO_HOST`, for example `HPA_DEMO_HOST=hpa-demo.<your-node-ip>.nip.io`
+Then also set `APP_INGRESS_HOST`, for example `APP_INGRESS_HOST=hpa-demo.<your-node-ip>.nip.io`
 ([nip.io](https://nip.io) turns that name into the IP inside it).
 
 Expected: `deployment "hpa-demo" successfully rolled out`
@@ -151,23 +151,26 @@ A 2-node k3s cluster (docker01 and linux01, 4 CPU / 8 GB each).
 | `TARGETS` shows `<unknown>` | metrics-server not installed or still starting | Check `kubectl top pods -n hpa-demo`. Wait a minute, or install metrics-server. |
 | Pods stuck in `ImagePullBackOff` | Cluster can't reach `ghcr.io` | Check the nodes have internet access |
 | Pods stay `Terminating` for about 30 seconds | The demo app doesn't handle the stop signal (SIGTERM), so Kubernetes waits for its 30s grace period | Harmless in this demo |
-| `scripts/hpa-demo-image-tag.sh` says no commit found | The repo was cloned with `--depth 1` | Clone normally (full history), or set `HPA_DEMO_IMAGE` yourself |
+| `scripts/image-tag.sh` says no commit found | The repo was cloned with `--depth 1` | Clone normally (full history), or set `APP_IMAGE` yourself |
 | Pods never go above 1 | Not enough load, or the cluster is out of CPU | Raise `replicas` in the load generator; check `kubectl describe hpa -n hpa-demo` |
 
 ## How it's built and deployed (on the author's homelab)
 
-Merging a change under `apps/hpa-demo/` into `main` runs
-[`.github/workflows/hpa-demo-image.yml`](../../.github/workflows/hpa-demo-image.yml):
+hpa-demo uses the homelab's generic apps pipeline, [`.github/workflows/apps.yml`](../../.github/workflows/apps.yml),
+like any app under `apps/`. Merging a change under `apps/hpa-demo/` into `main`:
 
-1. **Build** (GitHub-hosted runner): [`scripts/hpa-demo-image-tag.sh`](../../scripts/hpa-demo-image-tag.sh) works out
-   the tag `sha-<last commit that changed apps/hpa-demo/app>`, and [`scripts/build-image.sh`](../../scripts/build-image.sh)
+1. **Build** (GitHub-hosted runner): [`scripts/image-tag.sh`](../../scripts/image-tag.sh) works out the tag
+   `sha-<last commit that changed apps/hpa-demo/app>`, and [`scripts/build-image.sh`](../../scripts/build-image.sh)
    builds and pushes `ghcr.io/zulhardy/hpa-demo:<tag>` with GitHub's short-lived per-run token. If that image
    already exists (only manifests changed), it's reused.
-2. **Deploy** (self-hosted runner on docker01): [`scripts/ci-deploy-hpa-demo.sh`](../../scripts/ci-deploy-hpa-demo.sh)
-   logs in to OpenBao with GitHub's OIDC token, receives a Kubernetes token that expires after 10 minutes and only
-   works in the `hpa-demo` namespace, then runs `scripts/hpa-demo.sh deploy` and waits for the rollout.
+2. **Deploy** (self-hosted runner on docker01): [`scripts/ci-apps.sh`](../../scripts/ci-apps.sh) logs in to OpenBao
+   with GitHub's OIDC token, receives a Kubernetes token that expires after 10 minutes and only works in the
+   `hpa-demo` namespace, then runs [`scripts/deploy.sh hpa-demo`](../../scripts/deploy.sh) and waits for the rollout.
 
-Who may deploy, and with which permissions, is in [`k8s/05-deploy-rbac.yaml`](k8s/05-deploy-rbac.yaml).
+Only the numbered manifests in `k8s/` are deployed; `load-generator.yaml` isn't, so the load test stays manual.
+Who may deploy, and with which permissions, is in
+[`app-deployer-rbac.yaml.tmpl`](../../ansible/files/k8s/app-deployer-rbac.yaml.tmpl), applied when the app was
+onboarded. How it all works: [docs/AUTOMATION.md](../../docs/AUTOMATION.md).
 You don't need any of this to *try* the demo on your own cluster: `scripts/hpa-demo.sh deploy` uses your own kubeconfig.
 
 ## Security choices

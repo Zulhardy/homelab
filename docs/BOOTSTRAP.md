@@ -1,5 +1,9 @@
 # Homelab Bootstrap (one-time, done by the human)
 
+> These are the first-time steps for a brand-new homelab: GitHub settings, SSH, Docker and the runner.
+> After them, run the automation bootstrap in [AUTOMATION.md](AUTOMATION.md). From then on, merging a pull request
+> is the only manual step.
+
 After these steps, changes reach the VMs through pull requests and the runner on docker01, not by hand.
 Every step that involves a password, key, or token is yours to do. The agent never handles them.
 

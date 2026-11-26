@@ -1,8 +1,12 @@
 ---
-# Installs OpenBao (secrets vault) on docker01.
-# - Listens ONLY on 127.0.0.1:8200 (not reachable from the network), with TLS.
-# - Does NOT initialise or unseal it: that produces the unseal keys and root token,
-#   which only the human handles (see docs/OPENBAO.md).
+# Installs and configures OpenBao (secrets vault) on docker01.
+# - API listens ONLY on 127.0.0.1:8200 (not reachable from the network), with TLS.
+# - Admin socket /run/openbao/admin.sock (openbao user only, reachable via sudo): allows creating a new root
+#   token from 2 recovery keys. OpenBao 2.5.4+ blocks this on normal listeners by default.
+# - Auto-unseal with a static key file (/etc/openbao/seal/homelab-1.key), created once, never overwritten.
+#   BACK IT UP (see docs/OPENBAO.md). Switching an existing vault to it needs a one-time migration
+#   (scripts/bootstrap-automation.sh does that).
+# - Does NOT initialise OpenBao: that produces the recovery keys, which only the human handles.
 - name: Install OpenBao
   hosts: control
   become: true
@@ -20,6 +24,43 @@
       ansible.builtin.apt:
         deb: "/var/cache/{{ openbao_deb }}"
         state: present
+
+    - name: Create seal key directory (openbao user only)
+      ansible.builtin.file:
+        path: /etc/openbao/seal
+        state: directory
+        owner: openbao
+        group: openbao
+        mode: "0700"
+
+    - name: Create the static auto-unseal key ONCE (32 random bytes; never overwritten)
+      ansible.builtin.shell:
+        cmd: umask 077 && head -c 32 /dev/urandom > /etc/openbao/seal/homelab-1.key
+        creates: /etc/openbao/seal/homelab-1.key
+
+    - name: Restrict the seal key to the openbao user, read-only
+      ansible.builtin.file:
+        path: /etc/openbao/seal/homelab-1.key
+        owner: openbao
+        group: openbao
+        mode: "0400"
+
+    - name: Create systemd drop-in directory for OpenBao
+      ansible.builtin.file:
+        path: /etc/systemd/system/openbao.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Systemd drop-in for OpenBao (runtime directory for the admin socket)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/openbao.service.d/homelab.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible (homelab repo)
+          [Service]
+          RuntimeDirectory=openbao
+          RuntimeDirectoryMode=0750
+      notify: Restart OpenBao
 
     - name: Create a TLS certificate valid for 127.0.0.1 and localhost
       # The package's own certificate has no subject alternative names, so clients can't verify it.
@@ -82,6 +123,20 @@
             tls_key_file  = "/opt/openbao/tls/tls.key"
           }
 
+          # Admin socket: only the openbao user (and root, via sudo) can connect.
+          # Re-enables the root-token generation endpoints here only (blocked by default since 2.5.4).
+          listener "unix" {
+            address     = "/run/openbao/admin.sock"
+            socket_mode = "0600"
+            disable_unauthed_generate_root_endpoints = false
+          }
+
+          # Auto-unseal from a key file on docker01 (accepted trade-off: root on docker01 can open the vault).
+          seal "static" {
+            current_key_id = "homelab-1"
+            current_key    = "file:///etc/openbao/seal/homelab-1.key"
+          }
+
           api_addr = "{{ openbao_addr }}"
       notify: Restart OpenBao
 
@@ -120,8 +175,12 @@
       ansible.builtin.debug:
         msg: >-
           OpenBao is {{ 'initialised' if (bao_status.stdout | from_json).initialized else 'NOT initialised yet' }}
-          and {{ 'sealed' if (bao_status.stdout | from_json).sealed else 'unsealed' }}.
-          Next: follow docs/OPENBAO.md.
+          and {{ 'sealed' if (bao_status.stdout | from_json).sealed else 'unsealed' }}
+          (seal type: {{ (bao_status.stdout | from_json).type }}{{ migration_note }}).
+      vars:
+        migration_note: >-
+          {{ ', MIGRATION PENDING: run scripts/bootstrap-automation.sh'
+             if (bao_status.stdout | from_json).migration | default(false) else '' }}
       when: not ansible_check_mode
 
   handlers:
@@ -129,3 +188,4 @@
       ansible.builtin.systemd_service:
         name: openbao
         state: restarted
+        daemon_reload: true
