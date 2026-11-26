@@ -1,7 +1,8 @@
 name: homelab
 
-# After a merge that changes the homelab setup, apply the Ansible playbooks to both VMs.
-# Runs on docker01's runner. Gets a 10-minute SSH certificate from OpenBao via GitHub OIDC
+# After a merge that changes the homelab setup, apply the Ansible playbooks to every VM
+# (base.yml, k3s.yml, openbao.yml, automation-access.yml). HIGH RISK, so it waits for approval
+# (GitHub environment "platform"). Runs on ops01's runner. Gets a 10-minute SSH certificate from OpenBao via GitHub OIDC
 # (scripts/ci-homelab.sh). No stored keys or passwords.
 #
 # NOTE: OpenBao only accepts GitHub tokens from this file (and apps.yml) on main.
@@ -22,7 +23,8 @@ permissions:
 jobs:
   apply:
     if: github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, homelab, docker01]
+    runs-on: [self-hosted, homelab]
+    environment: platform # approval required; OpenBao's "platform" role only accepts this environment
     timeout-minutes: 45
     permissions:
       contents: read

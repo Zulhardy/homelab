@@ -1,5 +1,5 @@
 ---
-# Installs the GitHub Actions self-hosted runner on VM1 as a dedicated, non-root user.
+# Installs the GitHub Actions self-hosted runner on ops01 as a dedicated, non-root user.
 # The registration token is short-lived and typed in by the human at run time; it is never stored.
 - name: Install GitHub Actions self-hosted runner
   hosts: control
@@ -22,13 +22,22 @@
         update_cache: true
         cache_valid_time: 3600
 
-    - name: Create runner user
+    - name: Create runner user (no extra groups, in particular NOT docker, which is root-equivalent)
       ansible.builtin.user:
         name: "{{ runner_user }}"
         shell: /bin/bash
         create_home: true
-        groups: docker
-        append: true
+
+    - name: Check whether the runner user is still in the docker group (older setups)
+      ansible.builtin.command: "id -nG {{ runner_user }}"
+      register: runner_groups
+      changed_when: false
+      check_mode: false
+
+    - name: Take the runner user out of the docker group
+      ansible.builtin.command: "gpasswd -d {{ runner_user }} docker"
+      when: "'docker' in runner_groups.stdout.split()"
+      changed_when: true
 
     - name: Create runner directory
       ansible.builtin.file:

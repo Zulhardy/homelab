@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
-# ONE-TIME bootstrap, run by a HUMAN on docker01 as your normal user (not with sudo).
+# ONE-TIME bootstrap, run by a HUMAN on ops01 as your normal user (not with sudo).
 # After this, the only manual step in the homelab is reviewing and merging pull requests.
 #
 # It asks for: your sudo password, and 2 of your 3 OpenBao unseal/recovery keys. Nothing is written to disk
 # except a sudo password file in a private temp folder that is deleted on exit.
 #
+#  0. base.yml      : hostnames from the inventory (ops01, prd01, dev01)
 #  1. openbao.yml   : auto-unseal key file + root-only admin socket (OpenBao restarts, migration pending)
 #  2. migrate       : switch OpenBao from unseal keys to auto-unseal (your keys become recovery keys)
 #  3. root token    : temporary, created over the admin socket from 2 recovery keys; revoked at the end
-#  4. k3s.yml       : publishes the cluster CA certificate for the pipeline
+#  4. k3s.yml       : joins dev01, pins node names, DEV/PRD node labels + PodNodeSelector, publishes the CA cert
 #  5. Kubernetes    : broker + pipeline admin account (cluster-admin, used only through 10-minute tokens)
-#  6. OpenBao       : SSH certificate authority, Kubernetes roles, policy, GitHub OIDC login for the pipelines
-#  7. automation    : "automation" user on both VMs, sshd trusts OpenBao-signed certificates
-#  8. apps          : onboards every existing apps/*/
-#  9. self-tests    : SSH as automation with a fresh certificate; deployer and admin token permissions
+#  6. OpenBao       : SSH certificate authority, Kubernetes roles, policies, GitHub OIDC login roles
+#                     (apps-check, apps-dev, apps-prd, platform: one per pipeline stage)
+#  7. automation    : "automation" user on every VM, sshd trusts OpenBao-signed certificates
+#  8. apps          : onboards every existing apps/*/ into DEV and PRD
+#  9. self-tests    : SSH as automation with a fresh certificate; DEV/PRD deployer token permissions;
+#                     GitHub environments dev / prd / platform exist with the right approval settings
 # 10. root token revoked
 # Safe to run again.
 set -euo pipefail
@@ -51,6 +54,9 @@ keys_json="$(python3 -I -c 'import json,sys; print(json.dumps({"keys": sys.argv[
 unset k1 k2
 
 ap() { ( cd ansible && ansible-playbook -i inventory/hosts.ini "playbooks/$1" --become-password-file "${work}/become" ); }
+
+echo "== 0. Base: hostnames ops01 / prd01 / dev01"
+ap base.yml
 
 echo "== 1. OpenBao: auto-unseal key + admin socket"
 ap openbao.yml
@@ -103,18 +109,39 @@ bao write ssh-client-signer/roles/automation - <<'ROLE'
 }
 ROLE
 
-bao policy write homelab-platform - <<'POLICY'
-# The homelab pipelines (homelab.yml, apps.yml on main).
-path "ssh-client-signer/sign/automation" { capabilities = ["update"] }  # 10-minute SSH certs for "automation"
-path "kubernetes/creds/*"                { capabilities = ["update"] }  # 10-minute Kubernetes tokens
-path "kubernetes/roles/*"                { capabilities = ["create", "update", "read"] }  # onboard new apps
+# --- Policies: one per pipeline job type. Each GitHub job only gets what its stage needs.
+bao policy write apps-check - <<'POLICY'
+# apps.yml "onboard-check" job (no approval): may only see which apps are onboarded.
+path "kubernetes/roles/*" { capabilities = ["read"] }
+POLICY
+bao policy write apps-dev - <<'POLICY'
+# apps.yml "deploy-dev" job (GitHub environment "dev", no approval): DEV deployer tokens only.
+path "kubernetes/creds/dev-*" { capabilities = ["update"] }
+POLICY
+bao policy write apps-prd - <<'POLICY'
+# apps.yml "deploy-prd" job (GitHub environment "prd", approval required): PRD deployer tokens only.
+path "kubernetes/creds/prd-*" { capabilities = ["update"] }
+POLICY
+bao policy write platform - <<'POLICY'
+# homelab.yml "apply" and apps.yml "onboard" (GitHub environment "platform", approval required).
+path "ssh-client-signer/sign/automation"   { capabilities = ["update"] }                     # 10-minute SSH certs
+path "kubernetes/creds/homelab-platform"   { capabilities = ["update"] }                     # 10-minute cluster-admin
+path "kubernetes/roles/*"                  { capabilities = ["create", "update", "read"] }   # onboard new apps
 POLICY
 
 bao auth list -format=json | grep -q '"jwt-github/"' || bao auth enable -path=jwt-github jwt
 bao write auth/jwt-github/config \
   oidc_discovery_url="https://token.actions.githubusercontent.com" \
   bound_issuer="https://token.actions.githubusercontent.com"
-bao write auth/jwt-github/role/homelab-platform - <<ROLE
+
+# jwt_role NAME POLICY WORKFLOWS_JSON [ENVIRONMENT]
+# Every role: this repo (by id), main only, push or manual run, named workflow files only, 10-minute session.
+# ENVIRONMENT: the GitHub environment the job must run in. GitHub only puts it in the token after the
+# environment's protection rules (required reviewers) have passed.
+jwt_role() {
+  local name="$1" policy="$2" wfs="$3" env="${4:-}" env_claim=""
+  [ -n "${env}" ] && env_claim=", \"environment\": \"${env}\""
+  bao write "auth/jwt-github/role/${name}" - <<ROLE
 {
   "role_type": "jwt",
   "user_claim": "sub",
@@ -123,21 +150,30 @@ bao write auth/jwt-github/role/homelab-platform - <<ROLE
     "repository_id": "${REPO_ID}",
     "ref": "refs/heads/main",
     "event_name": ["push", "workflow_dispatch"],
-    "job_workflow_ref": [
-      "${WF_PREFIX}/homelab.yml@refs/heads/main",
-      "${WF_PREFIX}/apps.yml@refs/heads/main"
-    ]
+    "job_workflow_ref": ${wfs}${env_claim}
   },
-  "token_policies": ["homelab-platform"],
+  "token_policies": ["${policy}"],
   "token_ttl": "10m",
   "token_max_ttl": "15m"
 }
 ROLE
-# Old single-app setup (replaced by homelab-platform)
-bao delete auth/jwt-github/role/hpa-demo-deploy >/dev/null 2>&1 || true
-bao policy delete hpa-demo-deploy >/dev/null 2>&1 || true
+}
+apps_wf="[\"${WF_PREFIX}/apps.yml@refs/heads/main\"]"
+both_wf="[\"${WF_PREFIX}/homelab.yml@refs/heads/main\", \"${WF_PREFIX}/apps.yml@refs/heads/main\"]"
+jwt_role apps-check apps-check "${apps_wf}"
+jwt_role apps-dev   apps-dev   "${apps_wf}" dev
+jwt_role apps-prd   apps-prd   "${apps_wf}" prd
+jwt_role platform   platform   "${both_wf}" platform
 
-echo "== 7. automation user + SSH certificate trust on both VMs"
+# Older setups (replaced by the roles above). Deleting OpenBao roles/policies only removes access.
+for old in homelab-platform hpa-demo-deploy; do
+  bao delete "auth/jwt-github/role/${old}" >/dev/null 2>&1 || true
+done
+bao policy delete homelab-platform >/dev/null 2>&1 || true
+bao policy delete hpa-demo-deploy >/dev/null 2>&1 || true
+bao delete kubernetes/roles/hpa-demo-deployer >/dev/null 2>&1 || true
+
+echo "== 7. automation user + SSH certificate trust on every VM"
 ap automation-access.yml
 
 echo "== 8. Onboard existing apps"
@@ -148,7 +184,7 @@ done
 echo "== 9. Self-tests"
 ssh-keygen -q -t ed25519 -N '' -f "${work}/id"
 bao write -field=signed_key ssh-client-signer/sign/automation public_key=@"${work}/id.pub" valid_principals=automation > "${work}/id-cert.pub"
-for h in 127.0.0.1 192.168.0.103; do
+for h in 127.0.0.1 192.168.0.103 192.168.0.104; do
   out="$(ssh -i "${work}/id" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o BatchMode=yes \
           "automation@${h}" 'sudo -n true && echo "$(hostname): automation can sudo"' 2>&1)" || true
   printf '  %-16s %s\n' "${h}" "${out}"
@@ -156,14 +192,43 @@ done
 for d in apps/*/k8s; do
   [ -d "${d}" ] || continue
   app="$(basename "$(dirname "${d}")")"
-  ( umask 077 && bao write -field=service_account_token "kubernetes/creds/${app}-deployer" kubernetes_namespace="${app}" ttl=10m > "${work}/t" )
-  kc() { kubectl --kubeconfig=/dev/null --server=https://127.0.0.1:6443 --certificate-authority="${work}/ca.crt" --token="$(cat "${work}/t")" "$@" 2>/dev/null; }
-  printf '  %-30s deploy:%s  secrets:%s  kube-system:%s\n' "${app} deployer" \
-    "$(kc auth can-i patch deployments -n "${app}" || true)" \
-    "$(kc auth can-i get secrets -n "${app}" || true)" \
-    "$(kc auth can-i patch deployments -n kube-system || true)"
+  for env in dev prd; do
+    other="$([ "${env}" = dev ] && echo prd || echo dev)"
+    ns="${app}-${env}"
+    ( umask 077 && bao write -field=service_account_token "kubernetes/creds/${env}-${app}" kubernetes_namespace="${ns}" ttl=10m > "${work}/t" )
+    kc() { kubectl --kubeconfig=/dev/null --server=https://127.0.0.1:6443 --certificate-authority="${work}/ca.crt" --token="$(cat "${work}/t")" "$@" 2>/dev/null; }
+    printf '  %-30s deploy:%s  secrets:%s  kube-system:%s  %s:%s\n' "${ns} deployer" \
+      "$(kc auth can-i patch deployments -n "${ns}" || true)" \
+      "$(kc auth can-i get secrets -n "${ns}" || true)" \
+      "$(kc auth can-i patch deployments -n kube-system || true)" \
+      "${other}" "$(kc auth can-i patch deployments -n "${app}-${other}" || true)"
+  done
 done
-echo "  Expected: both hosts 'automation can sudo'; each app deploy:yes secrets:no kube-system:no"
+echo "  Expected: all 3 hosts 'automation can sudo'; each deployer deploy:yes, everything else no"
+echo "  Nodes and their environment label (expected: prd01 prd, dev01 dev, ops01 none):"
+kubectl get nodes -L node-restriction.kubernetes.io/env | sed 's/^/    /'
+echo "  App namespaces and the nodes they are pinned to:"
+kubectl get namespaces -l homelab.zulhardy/app \
+  -o custom-columns='NAMESPACE:.metadata.name,NODES:.metadata.annotations.scheduler\.alpha\.kubernetes\.io/node-selector' | sed 's/^/    /'
+old_nodes="$(kubectl get nodes -o name | sed 's|node/||' | grep -vxE 'ops01|prd01|dev01' || true)"
+[ -z "${old_nodes}" ] || echo "  Old node entries to remove yourself (docs/K3S.md, 'Renaming nodes'): ${old_nodes//$'\n'/ }"
+
+echo "== GitHub environments (approval gates)"
+for env in dev prd platform; do
+  python3 -I - "https://api.github.com/repos/Zulhardy/homelab/environments/${env}" "${env}" <<'PY' || true
+import json, sys, urllib.request
+url, env = sys.argv[1], sys.argv[2]
+try:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"}), timeout=30) as r:
+        rules = [x.get("type") for x in json.load(r).get("protection_rules", [])]
+except Exception as e:
+    print(f"  {env:9} MISSING ({e}). Create it: see docs/AUTOMATION.md"); sys.exit(0)
+gated = "required_reviewers" in rules
+want = env != "dev"
+status = "OK" if gated == want else "CHECK"
+print(f"  {env:9} required reviewers: {'yes' if gated else 'no'} (expected {'yes' if want else 'no'})  {status}")
+PY
+done
 
 echo
 echo "Bootstrap done. BACK UP the auto-unseal key now (see docs/OPENBAO.md, 'Back up the seal key')."

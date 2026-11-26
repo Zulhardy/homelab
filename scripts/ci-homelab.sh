@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Homelab pipeline: applies the Ansible playbooks to both VMs after a merge. Runs ONLY in GitHub Actions,
-# on docker01's runner (.github/workflows/homelab.yml).
+# Homelab pipeline: applies the Ansible playbooks to every VM after a merge. Runs ONLY in GitHub Actions,
+# on ops01's runner (.github/workflows/homelab.yml).
 #
-#   1. Log in to OpenBao with the job's GitHub OIDC token
+#   0. Check the GitHub environment "platform" still requires approval (the job only starts after approval)
+#   1. Log in to OpenBao with the job's GitHub OIDC token (role "platform")
 #   2. Create a throwaway SSH key and have OpenBao sign it: certificate for user "automation", valid 10 minutes
 #   3. Run the playbooks over SSH as "automation" (passwordless sudo, certificate-only login)
 #
@@ -13,15 +14,18 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib/ci-openbao-login.sh
 source scripts/lib/ci-openbao-login.sh
 
-PLAYBOOKS=(docker.yml k3s.yml openbao.yml automation-access.yml)
+PLAYBOOKS=(base.yml k3s.yml openbao.yml automation-access.yml)
 
 work="$(mktemp -d "${RUNNER_TEMP:-/tmp}/homelab.XXXXXX")"
 chmod 700 "${work}"
 cleanup() { openbao_logout; rm -rf "${work}"; }
 trap cleanup EXIT
 
+echo "== 0. Approval gate"
+require_protected_environment platform
+
 echo "== 1. OpenBao login"
-openbao_login
+openbao_login platform
 
 echo "== 2. 10-minute SSH certificate for 'automation'"
 ssh-keygen -q -t ed25519 -N '' -C "homelab-pipeline-${GITHUB_RUN_ID:-local}" -f "${work}/id"

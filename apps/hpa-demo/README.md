@@ -116,11 +116,15 @@ CPU drops to near 0%. After about a minute the extra pods show `Terminating`, an
 scripts/hpa-demo.sh delete
 ```
 
-This removes the whole `hpa-demo` namespace and everything in it.
+This removes the whole `hpa-demo-dev` namespace and everything in it. (On the author's homelab it refuses:
+there the namespace is managed by the pipeline.)
+
+The scripts work in namespace `hpa-demo-dev` by default. Set `HPA_DEMO_ENV=prd` to use `hpa-demo-prd` instead.
 
 ## What it looked like on the author's homelab
 
-A 2-node k3s cluster (docker01 and linux01, 4 CPU / 8 GB each).
+A k3s cluster, 4 CPU / 8 GB per node. The screenshots are from the earlier 2-node setup (docker01 and linux01,
+namespace `hpa-demo`); the homelab now runs DEV on dev01 and PRD on prd01, in `hpa-demo-dev` / `hpa-demo-prd`.
 
 **Under load:** CPU at 501% of target, the HPA has scaled from 1 to 5 pods, spread across both nodes.
 
@@ -148,24 +152,26 @@ A 2-node k3s cluster (docker01 and linux01, 4 CPU / 8 GB each).
 
 | You see | Likely cause | What to do |
 |---|---|---|
-| `TARGETS` shows `<unknown>` | metrics-server not installed or still starting | Check `kubectl top pods -n hpa-demo`. Wait a minute, or install metrics-server. |
+| `TARGETS` shows `<unknown>` | metrics-server not installed or still starting | Check `kubectl top pods -n hpa-demo-dev`. Wait a minute, or install metrics-server. |
 | Pods stuck in `ImagePullBackOff` | Cluster can't reach `ghcr.io` | Check the nodes have internet access |
 | Pods stay `Terminating` for about 30 seconds | The demo app doesn't handle the stop signal (SIGTERM), so Kubernetes waits for its 30s grace period | Harmless in this demo |
 | `scripts/image-tag.sh` says no commit found | The repo was cloned with `--depth 1` | Clone normally (full history), or set `APP_IMAGE` yourself |
-| Pods never go above 1 | Not enough load, or the cluster is out of CPU | Raise `replicas` in the load generator; check `kubectl describe hpa -n hpa-demo` |
+| Pods never go above 1 | Not enough load, or the cluster is out of CPU | Raise `replicas` in the load generator; check `kubectl describe hpa -n hpa-demo-dev` |
 
 ## How it's built and deployed (on the author's homelab)
 
 hpa-demo uses the homelab's generic apps pipeline, [`.github/workflows/apps.yml`](../../.github/workflows/apps.yml),
 like any app under `apps/`. Merging a change under `apps/hpa-demo/` into `main`:
 
-1. **Build** (GitHub-hosted runner): [`scripts/image-tag.sh`](../../scripts/image-tag.sh) works out the tag
-   `sha-<last commit that changed apps/hpa-demo/app>`, and [`scripts/build-image.sh`](../../scripts/build-image.sh)
-   builds and pushes `ghcr.io/zulhardy/hpa-demo:<tag>` with GitHub's short-lived per-run token. If that image
-   already exists (only manifests changed), it's reused.
-2. **Deploy** (self-hosted runner on docker01): [`scripts/ci-apps.sh`](../../scripts/ci-apps.sh) logs in to OpenBao
-   with GitHub's OIDC token, receives a Kubernetes token that expires after 10 minutes and only works in the
-   `hpa-demo` namespace, then runs [`scripts/deploy.sh hpa-demo`](../../scripts/deploy.sh) and waits for the rollout.
+1. **Test and scan** (GitHub-hosted runners): unit tests in [`tests/test_app.py`](tests/test_app.py), Trivy scan of the repo.
+2. **Build** (GitHub-hosted runner): [`scripts/build-image.sh`](../../scripts/build-image.sh) builds
+   `ghcr.io/zulhardy/hpa-demo:sha-<last commit that changed apps/hpa-demo/app>`, runs
+   [`tests/integration.sh`](tests/integration.sh) against the container, scans the image, and only then pushes it.
+3. **DEV** (self-hosted runner on ops01, no approval): a 10-minute token that only works in `hpa-demo-dev`;
+   [`scripts/deploy.sh hpa-demo dev`](../../scripts/deploy.sh), rollout check, then `integration.sh` again against
+   `http://hpa-demo.192.168.0.104.nip.io`. The pods run on dev01.
+4. **PRD** (approval required): the same image, a token that only works in `hpa-demo-prd`, pods on prd01,
+   smoke test against `http://hpa-demo.192.168.0.103.nip.io`.
 
 Only the numbered manifests in `k8s/` are deployed; `load-generator.yaml` isn't, so the load test stays manual.
 Who may deploy, and with which permissions, is in

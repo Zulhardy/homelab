@@ -1,12 +1,22 @@
 name: apps
 
-# Build and deploy every app under apps/ after a merge. New apps are onboarded automatically.
-#   detect (GitHub-hosted) : which apps changed (all of them if shared files changed)
-#   build  (GitHub-hosted) : build + push ghcr.io/zulhardy/<app> (skipped if no Dockerfile or image exists)
-#   deploy (docker01)      : OpenBao via GitHub OIDC -> onboard if new (10-minute admin token)
-#                            -> deploy with the app's own 10-minute deployer token -> rollout check
+# After a merge: test, scan, build, then deploy every changed app under apps/ to DEV, then PRD.
 #
-# Jobs on docker01 run one at a time because there is a single self-hosted runner. No "concurrency" group
+#   detect         (GitHub-hosted) : which apps changed (all of them if shared files changed)
+#   test           (GitHub-hosted) : unit tests per app
+#   repo-scan      (GitHub-hosted) : Trivy on the whole repo (secrets, misconfigurations, vulnerabilities)
+#   build          (GitHub-hosted) : build image -> integration test against the container -> image scan
+#                                    -> push ghcr.io/zulhardy/<app> (only if all of that passed)
+#   onboard-check  (ops01)         : which apps aren't set up for DEV/PRD yet (read-only OpenBao role)
+#   onboard        (ops01) APPROVAL: new apps only: namespaces, deployers, OpenBao roles  [environment: platform]
+#   deploy-dev     (ops01)         : deploy to <app>-dev on dev01, then smoke test       [environment: dev]
+#   deploy-prd     (ops01) APPROVAL: deploy to <app>-prd on prd01, then smoke test       [environment: prd]
+#
+# Approvals are GitHub environment rules (required reviewers). OpenBao only hands out DEV credentials to jobs in
+# environment "dev", PRD credentials to jobs in "prd", and admin credentials to jobs in "platform" (the GitHub
+# token only names an environment after its approval has passed).
+#
+# Jobs on ops01 run one at a time because there is a single self-hosted runner. No "concurrency" group
 # on purpose: GitHub keeps only one waiting job per group and cancels older waiting ones.
 #
 # NOTE: OpenBao only accepts GitHub tokens from this file (and homelab.yml) on main.
@@ -19,16 +29,20 @@ on:
       - "ansible/files/k8s/app-deployer-rbac.yaml.tmpl"
       - "scripts/image-tag.sh"
       - "scripts/build-image.sh"
+      - "scripts/unit-test.sh"
+      - "scripts/integration-test.sh"
+      - "scripts/security-scan.sh"
       - "scripts/deploy.sh"
       - "scripts/onboard-app.sh"
       - "scripts/changed-apps.sh"
       - "scripts/ci-apps.sh"
       - "scripts/lib/**"
+      - ".trivyignore"
       - ".github/workflows/apps.yml"
   workflow_dispatch:
     inputs:
       app:
-        description: "App to build and deploy (folder name under apps/), or 'all'"
+        description: "App to test, build and deploy (folder name under apps/), or 'all'"
         required: true
         default: all
 
@@ -64,12 +78,46 @@ jobs:
           echo "Apps: ${apps}"
           echo "apps=${apps}" >> "${GITHUB_OUTPUT}"
 
-  build:
+  test:
     needs: detect
+    if: needs.detect.outputs.apps != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        app: ${{ fromJSON(needs.detect.outputs.apps) }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Unit tests
+        env:
+          APP: ${{ matrix.app }}
+        run: bash scripts/unit-test.sh "${APP}"
+
+  repo-scan:
+    needs: detect
+    if: needs.detect.outputs.apps != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Security scan (repo)
+        run: bash scripts/security-scan.sh repo
+
+  build:
+    needs: [detect, test, repo-scan]
     # Only main: a manual run on an unmerged branch must not publish images.
     if: github.ref == 'refs/heads/main' && needs.detect.outputs.apps != '[]'
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -84,17 +132,72 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Build and push ${{ matrix.app }}
+      - name: Build, integration test, scan, then push ${{ matrix.app }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
           APP: ${{ matrix.app }}
         run: bash scripts/build-image.sh "${APP}"
 
-  deploy:
+  onboard-check:
     needs: [detect, build]
     if: github.ref == 'refs/heads/main' && needs.detect.outputs.apps != '[]'
-    runs-on: [self-hosted, homelab, docker01]
+    runs-on: [self-hosted, homelab]
+    timeout-minutes: 5
+    outputs:
+      missing: ${{ steps.check.outputs.missing }}
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC token for OpenBao (role apps-check: read-only)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Apps not yet onboarded
+        id: check
+        env:
+          APPS: ${{ needs.detect.outputs.apps }}
+        run: |
+          missing="$(bash scripts/ci-apps.sh check-onboarded "${APPS}")"
+          echo "Not onboarded yet: ${missing}"
+          echo "missing=${missing}" >> "${GITHUB_OUTPUT}"
+
+  onboard:
+    needs: onboard-check
+    if: needs.onboard-check.outputs.missing != '[]'
+    runs-on: [self-hosted, homelab]
+    environment: platform # approval required: creates namespaces, accounts and OpenBao roles
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        app: ${{ fromJSON(needs.onboard-check.outputs.missing) }}
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC token for OpenBao (role platform)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Onboard ${{ matrix.app }} (DEV + PRD)
+        env:
+          APP: ${{ matrix.app }}
+        run: bash scripts/ci-apps.sh onboard "${APP}"
+
+  deploy-dev:
+    needs: [detect, onboard-check, onboard]
+    # Runs when onboarding succeeded or wasn't needed (skipped); never after a failure or cancellation.
+    if: >-
+      !cancelled() && github.ref == 'refs/heads/main' &&
+      needs.onboard-check.result == 'success' &&
+      (needs.onboard.result == 'success' || needs.onboard.result == 'skipped')
+    runs-on: [self-hosted, homelab]
+    environment: dev # no approval
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -103,7 +206,7 @@ jobs:
         app: ${{ fromJSON(needs.detect.outputs.apps) }}
     permissions:
       contents: read
-      id-token: write # lets this job ask GitHub for an OIDC token, which OpenBao checks
+      id-token: write # GitHub OIDC token for OpenBao (role apps-dev: DEV deployers only)
     steps:
       - name: Checkout (full history, needed to compute the image tag)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -111,7 +214,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Onboard (if new) and deploy ${{ matrix.app }}
+      - name: Deploy ${{ matrix.app }} to DEV and smoke-test it
         env:
           APP: ${{ matrix.app }}
-        run: bash scripts/ci-apps.sh "${APP}"
+        run: bash scripts/ci-apps.sh deploy "${APP}" dev
+
+  deploy-prd:
+    needs: [detect, deploy-dev]
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, homelab]
+    environment: prd # approval required
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        app: ${{ fromJSON(needs.detect.outputs.apps) }}
+    permissions:
+      contents: read
+      id-token: write # GitHub OIDC token for OpenBao (role apps-prd: PRD deployers only)
+    steps:
+      - name: Checkout (full history, needed to compute the image tag)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Deploy ${{ matrix.app }} to PRD and smoke-test it
+        env:
+          APP: ${{ matrix.app }}
+        run: bash scripts/ci-apps.sh deploy "${APP}" prd

@@ -17,4 +17,12 @@ done
 echo "== ansible-lint =="
 ansible-lint playbooks/
 
+echo "== shellcheck =="
+cd ..
+command -v shellcheck >/dev/null || { echo "shellcheck not installed" >&2; exit 1; }
+shellcheck scripts/*.sh scripts/lib/*.sh
+shopt -s nullglob
+app_scripts=(apps/*/tests/*.sh)
+[ "${#app_scripts[@]}" -eq 0 ] || shellcheck "${app_scripts[@]}"
+
 echo "All checks passed."

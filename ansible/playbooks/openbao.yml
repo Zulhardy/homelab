@@ -1,5 +1,5 @@
 ---
-# Installs and configures OpenBao (secrets vault) on docker01.
+# Installs and configures OpenBao (secrets vault) on ops01.
 # - API listens ONLY on 127.0.0.1:8200 (not reachable from the network), with TLS.
 # - Admin socket /run/openbao/admin.sock (openbao user only, reachable via sudo): allows creating a new root
 #   token from 2 recovery keys. OpenBao 2.5.4+ blocks this on normal listeners by default.
@@ -116,7 +116,7 @@
             path = "/opt/openbao/data"
           }
 
-          # Loopback only: only processes on docker01 (you, the runner) can reach it.
+          # Loopback only: only processes on ops01 (you, the runner) can reach it.
           listener "tcp" {
             address       = "127.0.0.1:8200"
             tls_cert_file = "/opt/openbao/tls/tls.crt"
@@ -131,7 +131,7 @@
             disable_unauthed_generate_root_endpoints = false
           }
 
-          # Auto-unseal from a key file on docker01 (accepted trade-off: root on docker01 can open the vault).
+          # Auto-unseal from a key file on ops01 (accepted trade-off: root on ops01 can open the vault).
           seal "static" {
             current_key_id = "homelab-1"
             current_key    = "file:///etc/openbao/seal/homelab-1.key"
@@ -140,7 +140,7 @@
           api_addr = "{{ openbao_addr }}"
       notify: Restart OpenBao
 
-    - name: Set client defaults for everyone on docker01 (address + certificate, no secrets)
+    - name: Set client defaults for everyone on ops01 (address + certificate, no secrets)
       ansible.builtin.copy:
         dest: /etc/profile.d/openbao.sh
         mode: "0644"

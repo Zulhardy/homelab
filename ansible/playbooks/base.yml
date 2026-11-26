@@ -1,0 +1,50 @@
+---
+# Basics for every homelab VM: supported OS, and the hostname from the inventory
+# (ops01 / prd01 / dev01). Runs first, before k3s.yml.
+#
+# Renaming a running k3s node makes it join as a NEW node; the old node entry has to be removed
+# by a human afterwards (docs/K3S.md, "Renaming nodes"). k3s.yml pins the node name to the inventory
+# name, so this only happens when the inventory name changes.
+
+- name: Base setup
+  hosts: homelab
+  become: true
+  tasks:
+    - name: Stop if a host is not Ubuntu 26.04 (pinned versions are built for it)
+      ansible.builtin.assert:
+        that:
+          - ansible_distribution == "Ubuntu"
+          - ansible_distribution_version == "26.04"
+        fail_msg: "This homelab targets Ubuntu 26.04; {{ inventory_hostname }} is {{ ansible_distribution }} {{ ansible_distribution_version }}"
+
+    - name: Map the new hostname to 127.0.1.1 first (keeps sudo from complaining during the rename)
+      ansible.builtin.lineinfile:
+        path: /etc/hosts
+        regexp: '^127\.0\.1\.1\s'
+        line: "127.0.1.1 {{ inventory_hostname }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Set the hostname
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+        use: systemd
+
+- name: Runner user has no root-equivalent groups
+  hosts: control
+  become: true
+  tasks:
+    - name: Read the runner user's groups
+      ansible.builtin.command: "id -nG {{ runner_user }}"
+      register: base_runner_groups
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Take the runner user out of the docker group (Docker is no longer used on the VMs)
+      ansible.builtin.command: "gpasswd -d {{ runner_user }} docker"
+      when:
+        - base_runner_groups.rc == 0
+        - "'docker' in base_runner_groups.stdout.split()"
+      changed_when: true

@@ -1,4 +1,4 @@
-# OpenBao (secrets vault) on docker01
+# OpenBao (secrets vault) on ops01
 
 OpenBao is an open-source secrets vault (a community fork of HashiCorp Vault). Here it's the **credential broker**
 for the pipelines: a job proves who it is with GitHub's OIDC token, and OpenBao hands out credentials that expire
@@ -7,7 +7,7 @@ after 10 minutes. No pipeline stores a password, key or token. See [AUTOMATION.m
 | | |
 |---|---|
 | Version | 2.7.3, official `.deb` from the GitHub release, checked against a pinned SHA-256 |
-| Runs on | docker01, as the `openbao` system user (hardened systemd unit from the package) |
+| Runs on | ops01, as the `openbao` system user (hardened systemd unit from the package) |
 | API | `https://127.0.0.1:8200` only (TLS). Not reachable from the network |
 | Admin socket | `/run/openbao/admin.sock`, `openbao` user only (reach it with `sudo`). Used only to create a new root token from recovery keys (OpenBao 2.5.4+ blocks that on normal listeners) |
 | Unsealing | **Automatic** after every restart, with the key file `/etc/openbao/seal/homelab-1.key` |
@@ -18,13 +18,14 @@ after 10 minutes. No pipeline stores a password, key or token. See [AUTOMATION.m
 
 ## Accepted trade-off: auto-unseal
 
-Anyone with **root on docker01** can read the seal key file and open the vault. That was chosen so nothing has to be
-typed after a reboot. The pipeline itself can get root on docker01 (through the `automation` SSH certificate), so
-**merging to `main` can reach everything in the vault**. The review before merge is the control.
+Anyone with **root on ops01** can read the seal key file and open the vault. That was chosen so nothing has to be
+typed after a reboot. The pipeline itself can get root on ops01 (through the `automation` SSH certificate), so
+**an approved homelab run can reach everything in the vault**. The review before merge, and the `platform`
+approval, are the controls.
 
 ## Back up the auto-unseal key
 
-**Without the key file, the vault's data can't be opened, not even with the recovery keys.** If docker01's disk is
+**Without the key file, the vault's data can't be opened, not even with the recovery keys.** If ops01's disk is
 lost, you'd need the key and a copy of `/opt/openbao/data` to restore. Back the key up once, after the bootstrap:
 
 > Run this, copy the output into your password manager as "OpenBao seal key homelab-1", then run `clear`.
@@ -34,10 +35,10 @@ lost, you'd need the key and a copy of `/opt/openbao/data` to restore. Back the 
 sudo base64 -w0 /etc/openbao/seal/homelab-1.key; echo
 ```
 
-To restore it onto a rebuilt docker01: `echo '<value>' | base64 -d | sudo tee /etc/openbao/seal/homelab-1.key >/dev/null`,
+To restore it onto a rebuilt ops01: `echo '<value>' | base64 -d | sudo tee /etc/openbao/seal/homelab-1.key >/dev/null`,
 then `sudo chown openbao:openbao /etc/openbao/seal/homelab-1.key && sudo chmod 0400 /etc/openbao/seal/homelab-1.key`.
 
-## Fresh install (a new docker01)
+## Fresh install (a new ops01)
 
 ```bash
 cd ~/homelab/ansible
@@ -77,15 +78,15 @@ If `bao status` says `certificate signed by unknown authority`, the terminal doe
 
 ```mermaid
 sequenceDiagram
-    participant J as Job on docker01 runner
+    participant J as Job on ops01 runner
     participant G as GitHub OIDC
     participant B as OpenBao 127.0.0.1:8200
     participant K as k3s API
     participant V as VM sshd
     J->>G: request an ID token, audience openbao-homelab
-    G-->>J: signed token with repo, branch, workflow
-    J->>B: log in, role homelab-platform
-    B->>B: check repo id, main branch, workflow file, audience
+    G-->>J: signed token with repo, branch, workflow, environment
+    J->>B: log in, role apps-dev, apps-prd, apps-check or platform
+    B->>B: check repo id, main branch, workflow file, environment, audience
     B-->>J: OpenBao session, 10 minutes
     alt homelab playbooks
         J->>B: sign a fresh SSH public key for user automation
@@ -105,10 +106,16 @@ What's configured in OpenBao (by the bootstrap):
 
 | Path | What |
 |---|---|
-| `auth/jwt-github/role/homelab-platform` | Accepts GitHub tokens only from repo ID 1473136403, branch `main`, push or manual run, workflow `homelab.yml` or `apps.yml`, audience `openbao-homelab` |
-| policy `homelab-platform` | Sign `automation` SSH certificates; get Kubernetes tokens; create Kubernetes roles for new apps. **Can't** change policies, login methods or the SSH CA |
+| `auth/jwt-github/role/apps-check` | `apps.yml`, no environment → policy `apps-check`: read which apps are onboarded |
+| `auth/jwt-github/role/apps-dev` | `apps.yml`, environment `dev` → policy `apps-dev`: tokens for `kubernetes/creds/dev-*` only |
+| `auth/jwt-github/role/apps-prd` | `apps.yml`, environment `prd` (approval) → policy `apps-prd`: tokens for `kubernetes/creds/prd-*` only |
+| `auth/jwt-github/role/platform` | `homelab.yml` or `apps.yml`, environment `platform` (approval) → policy `platform`: sign `automation` SSH certificates; cluster-admin tokens; create Kubernetes roles for new apps. **Can't** change policies, login methods or the SSH CA |
+| (all four roles) | Also require repo ID 1473136403, branch `main`, push or manual run, audience `openbao-homelab`; sessions last 10 minutes (max 15) |
 | `ssh-client-signer/` | SSH certificate authority; role `automation`: user certificates for principal `automation` only, 10 minutes (max 15) |
-| `kubernetes/` | Mints Kubernetes tokens using the `openbao-broker` account. Roles: `homelab-platform` (cluster-admin, for onboarding) and `<app>-deployer` (one per app) |
+| `kubernetes/` | Mints Kubernetes tokens using the `openbao-broker` account. Roles: `homelab-platform` (cluster-admin, for onboarding), and per app `dev-<app>` / `prd-<app>` (that environment's `deployer` only) |
+
+Older setups had a single login role `homelab-platform` (and before that `hpa-demo-deploy`); the bootstrap deletes
+them, which only removes access.
 
 ## Admin work (needs recovery keys)
 
@@ -125,11 +132,11 @@ sudo systemctl disable --now openbao   # stops all pipeline credentials; stays s
 sudo systemctl enable --now openbao    # back on (it unseals itself)
 ```
 
-To stop all post-merge jobs instead: `sudo systemctl stop actions.runner.zulhardy-homelab.docker01.service`.
+To stop all post-merge jobs instead: `sudo systemctl stop 'actions.runner.*'`.
 
 ## Optional: the web UI
 
-The UI only listens on docker01's loopback. From your PC, open an SSH tunnel and browse to it:
+The UI only listens on ops01's loopback. From your PC, open an SSH tunnel and browse to it:
 
 ```bash
 ssh -L 8200:127.0.0.1:8200 zulhardy@192.168.0.102

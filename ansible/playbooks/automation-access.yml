@@ -1,5 +1,5 @@
 ---
-# Lets the homelab pipeline manage both VMs without any stored key or password:
+# Lets the homelab pipeline manage every VM without any stored key or password:
 # - an "automation" user with passwordless sudo and NO password / authorized_keys
 # - sshd trusts certificates signed by OpenBao's SSH CA, and only for the "automation" principal
 # - the runner user knows the VMs' host keys
@@ -118,8 +118,8 @@
         group: "{{ runner_user }}"
         mode: "0700"
 
-    - name: Read host keys (docker01 via 127.0.0.1, linux01 via its IP)
-      ansible.builtin.command: "ssh-keyscan -t ed25519 {{ hostvars[item].k3s_node_ip if item != 'docker01' else '127.0.0.1' }}"
+    - name: Read host keys (the control node via 127.0.0.1, the others via their IP)
+      ansible.builtin.command: "ssh-keyscan -t ed25519 {{ '127.0.0.1' if item in groups['control'] else hostvars[item].k3s_node_ip }}"
       loop: "{{ groups['homelab'] }}"
       register: host_keys
       changed_when: false

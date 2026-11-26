@@ -1,23 +1,49 @@
 # shellcheck shell=bash
-# Sourced by pipeline scripts running on docker01's runner. Logs in to OpenBao with the job's GitHub OIDC token.
+# Sourced by pipeline scripts running on ops01's runner. Logs in to OpenBao with the job's GitHub OIDC token.
 #
-#   openbao_login            -> exports BAO_ADDR, BAO_CACERT, BAO_TOKEN (OpenBao session, 10 minutes)
-#   openbao_logout           -> revokes BAO_TOKEN (call from an EXIT trap)
-#   openbao_k8s_token ROLE NS FILE -> writes a 10-minute Kubernetes token for ROLE in NS to FILE
+#   require_protected_environment ENV  -> fails unless GitHub environment ENV has required reviewers
+#   openbao_login ROLE                 -> exports BAO_ADDR, BAO_CACERT, BAO_TOKEN (OpenBao session, 10 minutes)
+#   openbao_logout                     -> revokes BAO_TOKEN (call from an EXIT trap)
+#   openbao_k8s_token ROLE NS FILE     -> writes a 10-minute Kubernetes token for ROLE in NS to FILE
 #
-# OpenBao role "homelab-platform" only accepts tokens from this repo's main branch and the
-# homelab.yml / apps.yml workflows (set up by scripts/bootstrap-automation.sh).
+# OpenBao login roles (set up by scripts/bootstrap-automation.sh), all limited to this repo, main, and the
+# homelab.yml / apps.yml workflows:
+#   apps-check : no environment       -> may only READ which apps are onboarded
+#   apps-dev   : environment "dev"    -> DEV deployer tokens only
+#   apps-prd   : environment "prd"    -> PRD deployer tokens only (GitHub requires approval first)
+#   platform   : environment "platform" -> SSH certs for "automation", cluster-admin tokens, onboarding
+#                                        (GitHub requires approval first)
 
 export BAO_ADDR="https://127.0.0.1:8200"
 export BAO_CACERT="/etc/openbao/tls-ca.crt"
 OPENBAO_AUDIENCE="openbao-homelab"
-OPENBAO_ROLE="homelab-platform"
+GITHUB_REPO_API="https://api.github.com/repos/Zulhardy/homelab"
+
+# Defence in depth: if someone deleted the environment's protection rule (or GitHub auto-created the environment
+# without one), refuse to continue instead of deploying without the approval.
+require_protected_environment() {
+  local env="$1"
+  python3 -I - "${GITHUB_REPO_API}/environments/${env}" "${env}" <<'PY'
+import json, sys, urllib.request
+url, env = sys.argv[1], sys.argv[2]
+try:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"}), timeout=30) as r:
+        data = json.load(r)
+except Exception as e:
+    sys.exit(f"Could not read GitHub environment '{env}': {e}")
+rules = [r.get("type") for r in data.get("protection_rules", [])]
+if "required_reviewers" not in rules:
+    sys.exit(f"GitHub environment '{env}' has no required reviewers. Refusing to continue (see docs/AUTOMATION.md).")
+print(f"Environment '{env}' is protected by required reviewers.")
+PY
+}
 
 openbao_login() {
+  local role="${1:?openbao_login ROLE}"
   : "${ACTIONS_ID_TOKEN_REQUEST_URL:?Not running in GitHub Actions with id-token: write}"
   : "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:?Not running in GitHub Actions with id-token: write}"
   if ! bao status >/dev/null 2>&1; then
-    echo "OpenBao is sealed or not running on docker01. Check: sudo systemctl status openbao" >&2
+    echo "OpenBao is sealed or not running on ops01. Check: sudo systemctl status openbao" >&2
     return 1
   fi
   local jwt
@@ -28,7 +54,7 @@ req = urllib.request.Request(url, headers={"Authorization": "bearer " + os.envir
 with urllib.request.urlopen(req, timeout=30) as r:
     sys.stdout.write(json.load(r)["value"])
 ' "${OPENBAO_AUDIENCE}")"
-  BAO_TOKEN="$(printf '%s' "${jwt}" | bao write -field=token "auth/jwt-github/login" role="${OPENBAO_ROLE}" jwt=-)"
+  BAO_TOKEN="$(printf '%s' "${jwt}" | bao write -field=token "auth/jwt-github/login" role="${role}" jwt=-)"
   export BAO_TOKEN
 }
 
