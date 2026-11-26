@@ -14,18 +14,18 @@ Take it one part at a time. If something doesn't match what you see, stop and ch
 - [What you'll build](#what-youll-build)
 - [How to read this guide](#how-to-read-this-guide)
 - [Words you'll see](#words-youll-see)
-- [Part 0 — What you need](#part-0--what-you-need)
-- [Part 1 — Plan your network](#part-1--plan-your-network)
-- [Part 2 — Create the three VMs](#part-2--create-the-three-vms)
-- [Part 3 — Set up GitHub](#part-3--set-up-github)
-- [Part 4 — Prepare ops01](#part-4--prepare-ops01)
-- [Part 5 — Check Ansible can reach every VM](#part-5--check-ansible-can-reach-every-vm)
-- [Part 6 — Install Kubernetes (k3s)](#part-6--install-kubernetes-k3s)
-- [Part 7 — Install the secrets vault (OpenBao)](#part-7--install-the-secrets-vault-openbao)
-- [Part 8 — Install the GitHub runner](#part-8--install-the-github-runner)
-- [Part 9 — Run the one-time bootstrap](#part-9--run-the-one-time-bootstrap)
-- [Part 10 — Test everything](#part-10--test-everything)
-- [Part 11 — What next](#part-11--what-next)
+- [Part 1 — What you need](#part-1--what-you-need)
+- [Part 2 — Plan your network](#part-2--plan-your-network)
+- [Part 3 — Create the three VMs](#part-3--create-the-three-vms)
+- [Part 4 — Set up GitHub](#part-4--set-up-github)
+- [Part 5 — Prepare ops01](#part-5--prepare-ops01)
+- [Part 6 — Check Ansible can reach every VM](#part-6--check-ansible-can-reach-every-vm)
+- [Part 7 — Install Kubernetes (k3s)](#part-7--install-kubernetes-k3s)
+- [Part 8 — Install the secrets vault (OpenBao)](#part-8--install-the-secrets-vault-openbao)
+- [Part 9 — Install the GitHub runner](#part-9--install-the-github-runner)
+- [Part 10 — Run the one-time bootstrap](#part-10--run-the-one-time-bootstrap)
+- [Part 11 — Test everything](#part-11--test-everything)
+- [Part 12 — What next](#part-12--what-next)
 - [Troubleshooting](#troubleshooting)
 - [Appendix: moving a repo-level runner to the organization](#appendix-moving-a-repo-level-runner-to-the-organization)
 
@@ -62,7 +62,7 @@ flowchart TB
 |---|---|
 | 🌐 **In your browser** | Do this on github.com, on your own PC |
 | 💻 **On your PC** | Do this on your own computer (the one running the VMs) |
-| 🖥️ **On ops01** | Type this in a terminal on the ops01 VM (Part 4 shows how to open one) |
+| 🖥️ **On ops01** | Type this in a terminal on the ops01 VM (Part 5 shows how to open one) |
 | `<your-user>` | Replace with **your own** value, without the `< >`. E.g. `<your-user>` → `alex` |
 | ✅ **Check** | What you should see if it worked. Don't skip these |
 | ⚠️ | Something to be careful with |
@@ -86,10 +86,52 @@ right-click (Windows Terminal).
 
 ---
 
-## Part 0 — What you need
+## Part 1 — What you need
 
-- [ ] **A PC** that can run three VMs at once. The VMs need 8 GB RAM between them (4 + 2 + 2), plus what your PC
-      needs for itself: 16 GB RAM or more is comfortable [estimate]. About 75 GB free disk space.
+### 1.1 Hardware
+
+Your PC (the "host") runs all three VMs **at the same time**, so it needs enough memory for all three **plus** for
+itself.
+
+**The three VMs:**
+
+| VM | Its job | RAM: minimum | RAM: recommended | CPUs: min / rec | Disk: min / rec |
+|---|---|---|---|---|---|
+| ops01 | Kubernetes control plane, vault, runner, Ansible | 3 GB | 4 GB | 2 / 2–4 | 15 GB / 25 GB |
+| prd01 | Runs the PRD (production) apps | 1.5 GB | 2 GB | 1 / 2 | 15 GB / 25 GB |
+| dev01 | Runs the DEV (development) apps | 1.5 GB | 2 GB | 1 / 2 | 15 GB / 25 GB |
+| **Total** | | **6 GB** | **8 GB** | **4 / 6–8** | **45 GB / 75 GB** |
+
+**Your PC:**
+
+| | Minimum | Recommended |
+|---|---|---|
+| RAM | 12 GB (tight: close other programs while the VMs run) | 16 GB or more |
+| CPU | 4 cores / threads, with virtualization (Intel VT-x / AMD-V) turned on in the BIOS/UEFI | 6 or more threads |
+| Free disk | 50 GB | 80 GB or more, on an SSD |
+
+Where these numbers come from:
+- Kubernetes (k3s) itself: k3s's own documentation sets the minimum at 2 CPU cores and 2 GB RAM for the server (ops01)
+  and 1 core and 512 MB for each agent (prd01, dev01), recommends 2 CPUs and 4 GB for a small cluster's server, and
+  recommends an SSD ([k3s requirements](https://docs.k3s.io/installation/requirements)).
+- On top of that [estimate]: Ubuntu itself (roughly 0.5 GB per VM), and on ops01 the vault and pipeline jobs
+  (a runner job used about 0.4 GB on the author's homelab). The VMs' minimums above include that.
+- Your PC's own operating system usually needs 3–4 GB while you work [estimate], hence 12 GB as the host minimum.
+
+> ⚠️ **Only 8 GB RAM?** [Inference] That's not enough to run all three VMs at once: after Windows or macOS takes its
+> share, about 4 GB is left, and the VMs need at least 6 GB. Options:
+> - use a computer with more memory (a home desktop, a school lab PC, an old PC you can install Proxmox on);
+> - build **one** homelab together with a classmate on the bigger machine, and both work through its repos;
+> - add RAM, if your laptop allows it.
+>
+> Running the VMs with less memory than the minimum usually ends with Kubernetes failing in confusing ways, so don't
+> squeeze them.
+
+If your hypervisor says virtualization isn't available, it's usually switched off in the BIOS/UEFI settings
+(look for "Intel Virtualization Technology", "VT-x", "SVM" or "AMD-V").
+
+### 1.2 Software and accounts
+
 - [ ] **A hypervisor** you're comfortable with: Hyper-V, VirtualBox, Proxmox, VMware Workstation, or similar.
 - [ ] **Ubuntu Server 26.04 LTS** installer image (ISO) from [ubuntu.com/download/server](https://ubuntu.com/download/server).
       ⚠️ It must be **26.04**: the setup checks this and stops on any other version, because the pinned software
@@ -97,46 +139,113 @@ right-click (Windows Terminal).
 - [ ] **A GitHub account** (free).
 - [ ] **A password manager** (e.g. Bitwarden, KeePassXC, 1Password). You'll store a few keys that must not be lost
       and must not end up in chat, screenshots or the repo.
-- [ ] **Your home router's network details.** On Windows, run `ipconfig` in a terminal; on macOS/Linux, `ip a` and
-      `ip route`. Note:
-  - your PC's IPv4 address (e.g. `192.168.0.50`)
-  - the **default gateway** (your router, e.g. `192.168.0.1`)
+- [ ] **Your home network**, not a school, office, hotel or phone-hotspot network. [Inference] Those often don't let
+      VMs get their own addresses.
 
-## Part 1 — Plan your network
+## Part 2 — Plan your network
 
 **Why:** the machines talk to each other by IP address, so each one needs a **fixed** address that never changes.
+To choose those addresses, you first need to know how your home network is numbered.
 
-Pick three free addresses in your home network. The author's setup:
+### 2.1 Find your home network details
 
-| VM | Address (author's) | Yours | Memory | CPUs | Disk |
-|---|---|---|---|---|---|
-| ops01 | 192.168.0.102 | `____________` | 4 GB | 2–4 | 25 GB [estimate] |
-| prd01 | 192.168.0.103 | `____________` | 2 GB | 2–4 | 25 GB [estimate] |
-| dev01 | 192.168.0.104 | `____________` | 2 GB | 2–4 | 25 GB [estimate] |
+💻 **On your PC**, connected to your home network (Wi-Fi or cable), find four things:
 
-- Use the same first three numbers as your PC (e.g. `192.168.0.x` or `192.168.1.x`).
-- Pick numbers **outside your router's automatic (DHCP) range**, or reserve them in the router, so the router never
-  hands them to another device. If you're not sure, numbers around 100–120 are often free, but check first:
-  `ping 192.168.0.102` from your PC should **fail** ("Request timed out" / "unreachable") if the address is free.
+| What | What it is |
+|---|---|
+| **IPv4 address** | Your PC's own address on the network, e.g. `192.168.0.50` |
+| **Subnet mask** | Which part of the address is "the network". Almost always `255.255.255.0` at home |
+| **Default gateway** | Your router's address, e.g. `192.168.0.1` |
+| **DNS servers** | Who turns names like github.com into addresses. Often the router itself |
+
+<details open>
+<summary><b>Windows</b></summary>
+
+Open **Windows Terminal** or **PowerShell** (Start → type "terminal") and run:
+
+```powershell
+ipconfig /all
+```
+
+Scroll to the adapter you're actually connected through: **"Wireless LAN adapter Wi-Fi"** for Wi-Fi or
+**"Ethernet adapter Ethernet"** for a cable. It's the one that **has a Default Gateway**. Ignore adapters named
+`vEthernet`, `VirtualBox`, `VMware` or `Bluetooth`. Example:
+
+```
+Wireless LAN adapter Wi-Fi:
+   IPv4 Address. . . . . . . . . . . : 192.168.0.50(Preferred)
+   Subnet Mask . . . . . . . . . . . : 255.255.255.0
+   Default Gateway . . . . . . . . . : 192.168.0.1
+   DNS Servers . . . . . . . . . . . : 192.168.0.1
+```
+</details>
+
+<details>
+<summary><b>macOS</b></summary>
+
+**System Settings → Wi-Fi** (or **Network → Ethernet**) → **Details…** next to your network:
+- **TCP/IP** tab: IP address, Subnet mask, Router (= default gateway)
+- **DNS** tab: DNS servers
+</details>
+
+<details>
+<summary><b>Linux</b></summary>
+
+```bash
+ip -4 addr        # look for "inet 192.168.0.50/24" on your Wi-Fi or Ethernet interface (/24 = 255.255.255.0)
+ip route          # "default via 192.168.0.1" = the default gateway
+resolvectl status | grep 'DNS Servers'
+```
+</details>
+
+Now turn them into the values you'll type into the Ubuntu installer (Part 3.3). Fill in the last column:
+
+| Installer field | How to work it out | Example | Yours |
+|---|---|---|---|
+| **Subnet** | Your PC's address with the last number replaced by `0`, then `/24` (when the mask is `255.255.255.0`) | `192.168.0.0/24` | `____________` |
+| **Gateway** | The default gateway, as is | `192.168.0.1` | `____________` |
+| **Name servers** | The DNS server(s). If it shows something odd (e.g. starting with `fe80`), use the gateway | `192.168.0.1` | `____________` |
+
+> ⚠️ If your subnet mask is **not** `255.255.255.0` (e.g. `255.255.254.0`), stop and ask for help: the `/24` part and
+> the address choices below would be different.
+
+### 2.2 Pick three addresses
+
+Pick three free addresses in the same network. They must have the **same first three numbers** as your PC
+(e.g. `192.168.0.x`). The author's setup:
+
+| VM | Author's address | Yours |
+|---|---|---|
+| ops01 | 192.168.0.102 | `____________` |
+| prd01 | 192.168.0.103 | `____________` |
+| dev01 | 192.168.0.104 | `____________` |
+
+- The last number must be between 2 and 254, and not your PC's or the router's.
+- Pick numbers **outside your router's automatic (DHCP) range**, so the router never gives them to another device.
+  To see the range, open the gateway address in your browser (e.g. `http://192.168.0.1`), log in (often printed on a
+  sticker on the router), and look for **DHCP** settings ("start address" / "address pool"). If you can't check,
+  numbers around 100–120 are often outside it [Inference], but test first.
+- 💻 Test each address is free: `ping 192.168.0.102` should **fail** ("Request timed out" / "Destination host
+  unreachable"). If something replies, that address is taken: pick another.
 - Also choose **one username** you'll use on all three VMs (e.g. `alex`). In this guide it's `<your-user>`.
 
-Write your three addresses down; you'll use them many times.
+Write your values down; you'll use them many times.
 
-## Part 2 — Create the three VMs
+## Part 3 — Create the three VMs
 
 **Why:** each VM is a separate "computer" with its own job.
 
-### 2.1 What every VM needs (any hypervisor)
+### 3.1 What every VM needs (any hypervisor)
 
 | Setting | Value | Why |
 |---|---|---|
 | Operating system | Ubuntu Server 26.04 LTS (64-bit) | The setup is built and tested for it |
-| Memory | ops01 4 GB, prd01 2 GB, dev01 2 GB, **fixed** (no "dynamic memory" / "ballooning") | Kubernetes plans around the memory it sees at start; memory that changes later confuses it |
-| CPUs | 2 to 4 | k3s needs at least 2 |
-| Disk | ~25 GB each [estimate] | OS, Kubernetes and container images |
+| Memory | ops01 4 GB, prd01 2 GB, dev01 2 GB (at least 3 / 1.5 / 1.5 GB, see Part 1.1), **fixed** (no "dynamic memory" / "ballooning") | Kubernetes plans around the memory it sees at start; memory that changes later confuses it |
+| CPUs | ops01 at least 2; prd01 and dev01 at least 1 (2 recommended) | The k3s server needs 2 cores, an agent 1 |
+| Disk | 25 GB each (at least 15 GB) [estimate] | OS, Kubernetes and container images. Let the disk grow as needed ("dynamically allocated") to save space |
 | Network | **Bridged** to your home network (not NAT) | Each VM needs its own address on your home network, reachable from your PC and from each other |
 
-### 2.2 Notes for your hypervisor
+### 3.2 Notes for your hypervisor
 
 Only read the one you use. Menu names change between versions; look for the setting by meaning.
 
@@ -159,7 +268,7 @@ Only read the one you use. Menu names change between versions; look for the sett
    If it offers "Unattended install", **skip it**: you need to set the network by hand during the install.
 2. **Settings → Network → Adapter 1 → Attached to: Bridged Adapter**, Name: your physical network card.
    ⚠️ **NAT won't work**: with NAT, the VMs can't reach each other at their own addresses and you can't SSH in.
-3. Bridging over Wi-Fi sometimes fails on laptops. If the VMs get no network in Part 2.3, try a cable, or ask for help.
+3. Bridging over Wi-Fi sometimes fails on laptops. If the VMs get no network in Part 3.3, try a cable, or ask for help.
 </details>
 
 <details>
@@ -188,19 +297,23 @@ Anything works if it meets the table in 2.1: three Ubuntu Server 26.04 machines 
 are for `amd64`), fixed memory, each with its own fixed address on the same network, able to reach the internet.
 </details>
 
-### 2.3 Install Ubuntu on each VM
+### 3.3 Install Ubuntu on each VM
 
 Start the VM and go through the Ubuntu Server installer. Mostly accept the defaults, except:
 
-1. **Network configuration**: choose your network interface → **Edit IPv4** → **Manual**, then:
+1. **Network configuration**: choose your network interface → **Edit IPv4** → **Manual**, then type the values you
+   wrote down in Part 2:
 
-   | Field | Value (example) |
-   |---|---|
-   | Subnet | `192.168.0.0/24` (your network, with `.0/24` at the end) |
-   | Address | this VM's address from Part 1, e.g. `192.168.0.102` |
-   | Gateway | your router, e.g. `192.168.0.1` |
-   | Name servers | your router, e.g. `192.168.0.1` (or `1.1.1.1`) |
-   | Search domains | leave empty |
+   | Field | Where it comes from | Example |
+   |---|---|---|
+   | Subnet | Part 2.1 | `192.168.0.0/24` |
+   | Address | **this** VM's address, Part 2.2 | `192.168.0.102` for ops01 |
+   | Gateway | Part 2.1 | `192.168.0.1` |
+   | Name servers | Part 2.1 | `192.168.0.1` |
+   | Search domains | leave empty | |
+
+   Don't know these yet? Go back to [Part 2.1](#21-find-your-home-network-details): it shows how to find them on your
+   PC.
 
 2. **Profile**: your name; **server name** = `ops01`, `prd01` or `dev01`; username = `<your-user>` (the same on all
    three); a strong password. Using the **same password** on all three keeps later steps to one password prompt.
@@ -223,11 +336,11 @@ You should land at a prompt like `<your-user>@ops01:~$`. Type `exit` to leave.
 
 ---
 
-## Part 3 — Set up GitHub
+## Part 4 — Set up GitHub
 
 Everything in this part is 🌐 **in your browser**.
 
-### 3.1 Create an organization
+### 4.1 Create an organization
 
 **Why:** one self-hosted runner can then serve both of your repos.
 
@@ -235,7 +348,7 @@ Everything in this part is 🌐 **in your browser**.
    In this guide it's `<your-org>`.
 2. It belongs to your account; you're its owner.
 
-### 3.2 Copy the two repos into your organization
+### 4.2 Copy the two repos into your organization
 
 1. Open [github.com/zulhardy-lab/homelab](https://github.com/zulhardy-lab/homelab) → green **Use this template** →
    **Create a new repository**.
@@ -247,7 +360,7 @@ Everything in this part is 🌐 **in your browser**.
 > Why "template" and not "fork": a fork stays linked to the original, and its pull requests point at the original
 > repo by default. A template copy is fully yours.
 
-### 3.3 Create the approval gates (environments)
+### 4.3 Create the approval gates (environments)
 
 **Why:** the pipeline pauses at risky steps until you approve. OpenBao checks these names, so spell them exactly.
 
@@ -266,7 +379,7 @@ In **devops-projects → Settings → Environments**:
 
 Click **Save protection rules** after each change.
 
-### 3.4 Put in your own values
+### 4.4 Put in your own values
 
 **Why:** the copied code contains the author's addresses, username and organization. Change them **before** running
 anything.
@@ -278,7 +391,7 @@ browser and copy the number after `"id":` near the top:
 - `https://api.github.com/repos/<your-org>/devops-projects`
 
 Now edit the files on GitHub: open the file → pencil icon (**Edit**) → make the change → **Commit changes…** →
-**Commit directly to the `main` branch**. (Only during setup. From Part 3.5 on, every change goes through a PR.)
+**Commit directly to the `main` branch**. (Only during setup. From Part 4.5 on, every change goes through a PR.)
 
 **In `homelab`:**
 
@@ -308,7 +421,7 @@ Now edit the files on GitHub: open the file → pencil icon (**Edit**) → make 
 ✅ **Check:** search each repo for the old values. On the repo page, press `/` and search `zulhardy-lab`, then your
 old example address `192.168.0.10`. Only docs and comments should still mention them.
 
-### 3.5 Protect `main`
+### 4.5 Protect `main`
 
 **Why:** from now on, nothing reaches `main` without a pull request and passing checks.
 
@@ -323,7 +436,7 @@ In **each repo → Settings → Rules → Rulesets → New ruleset → New branc
   test PR first so they run once, then come back.
 - **Create**.
 
-### 3.6 Actions and security settings
+### 4.6 Actions and security settings
 
 In **each repo → Settings**:
 
@@ -343,14 +456,14 @@ In **your organization → Settings → Actions → Runner groups → Default**:
 
 ---
 
-## Part 4 — Prepare ops01
+## Part 5 — Prepare ops01
 
-### 4.1 Open a terminal on ops01
+### 5.1 Open a terminal on ops01
 
 💻 On your PC: `ssh <your-user>@<ops01-address>`. Use this instead of the hypervisor's console window: copy and paste
 work properly. Everything in Parts 4 to 10 marked 🖥️ is typed here.
 
-### 4.2 Install the tools
+### 5.2 Install the tools
 
 🖥️ **On ops01:**
 
@@ -361,7 +474,7 @@ sudo apt install -y ansible git
 
 `sudo` asks for your password. Nothing shows while you type it; that's normal.
 
-### 4.3 Let ops01 log in to prd01 and dev01 without a password
+### 5.3 Let ops01 log in to prd01 and dev01 without a password
 
 **Why:** Ansible on ops01 sets up the other two VMs over SSH. A key is safer and smoother than typing passwords.
 
@@ -375,14 +488,16 @@ ssh-copy-id <your-user>@192.168.0.103     # prd01: answer "yes", then prd01's pa
 ssh-copy-id <your-user>@192.168.0.104     # dev01: same
 ```
 
-Now load the key into the **ssh-agent**, so neither you nor Ansible is asked for the passphrase again:
+Now load the key into the **ssh-agent**, a small helper that remembers the unlocked key, so neither you nor Ansible
+is asked for the passphrase again:
 
 ```bash
 eval "$(ssh-agent -s)"
 ssh-add                    # type the key's passphrase once
 ```
 
-⚠️ The agent only lasts for this terminal session. **Run those two lines again every time you log in to ops01.**
+⚠️ The agent only lasts for this terminal session. During setup (Parts 6 to 10), **run those two lines again
+whenever you log in to ops01**. After setup you rarely need them: the pipeline runs Ansible for you (see Part 12).
 
 ✅ **Check:**
 
@@ -394,14 +509,14 @@ ssh <your-user>@192.168.0.104 hostname     # prints dev01
 - Asks "Enter passphrase for key"? The agent isn't loaded: run the two `ssh-agent` lines again.
 - Asks for `<your-user>@...'s password`? `ssh-copy-id` didn't work: run it again.
 
-### 4.4 Get your homelab repo onto ops01
+### 5.4 Get your homelab repo onto ops01
 
 🖥️ **On ops01:**
 
 ```bash
 git clone https://github.com/<your-org>/homelab.git ~/homelab
 cd ~/homelab
-git log --oneline -3      # your own commits from Part 3.4 should be at the top
+git log --oneline -3      # your own commits from Part 4.4 should be at the top
 ```
 
 The repo is public, so no password is needed. ops01 only ever **reads** from GitHub; changes go through PRs on
@@ -409,7 +524,7 @@ github.com.
 
 ---
 
-## Part 5 — Check Ansible can reach every VM
+## Part 6 — Check Ansible can reach every VM
 
 **Why:** a quick, harmless test before Ansible changes anything.
 
@@ -435,7 +550,7 @@ ansible-playbook playbooks/base.yml -K --check --diff
 
 ---
 
-## Part 6 — Install Kubernetes (k3s)
+## Part 7 — Install Kubernetes (k3s)
 
 **Why:** Kubernetes is what runs the apps. ops01 becomes the "brain" (control plane); prd01 and dev01 run the apps.
 
@@ -480,7 +595,7 @@ More detail: [K3S.md](K3S.md).
 
 ---
 
-## Part 7 — Install the secrets vault (OpenBao)
+## Part 8 — Install the secrets vault (OpenBao)
 
 **Why:** the pipeline needs credentials to change your machines. Instead of storing passwords in GitHub, OpenBao
 checks each pipeline job's identity and hands out credentials that expire after **10 minutes**.
@@ -502,8 +617,8 @@ Log out and back in (so `bao` knows where OpenBao is), then initialise it:
 bao operator init -recovery-shares=3 -recovery-threshold=2
 ```
 
-- **Recovery keys 1–3**: keep forever. Any **2** of them are needed for admin work (like the bootstrap in Part 9).
-- **Initial root token**: keep it **only until the end of Part 9**, where you'll revoke (cancel) it.
+- **Recovery keys 1–3**: keep forever. Any **2** of them are needed for admin work (like the bootstrap in Part 10).
+- **Initial root token**: keep it **only until the end of Part 10**, where you'll revoke (cancel) it.
 
 ```bash
 clear
@@ -517,7 +632,7 @@ More detail: [OPENBAO.md](OPENBAO.md).
 
 ---
 
-## Part 8 — Install the GitHub runner
+## Part 9 — Install the GitHub runner
 
 **Why:** the **runner** runs pipeline jobs that must happen inside your home network (changing the VMs, deploying apps).
 It connects **out** to GitHub, so nothing on your network is opened to the internet.
@@ -542,7 +657,7 @@ It connects **out** to GitHub, so nothing on your network is opened to the inter
 
 ---
 
-## Part 9 — Run the one-time bootstrap
+## Part 10 — Run the one-time bootstrap
 
 **Why:** this script connects everything: it lets OpenBao create Kubernetes tokens and SSH certificates, tells OpenBao
 which GitHub repos and workflows to trust (by repo ID, branch, workflow file and environment), creates the pipeline's
@@ -578,9 +693,9 @@ It asks for your **sudo password** and **2 of your 3 recovery keys** (hidden whi
 Every line should end in **OK** (or say `automation can sudo`). A **CHECK** or **MISSING** points at the GitHub
 setting or ID to fix; fix it and run the script again (it's safe to re-run).
 
-### 9.1 Revoke the initial root token
+### 10.1 Revoke the initial root token
 
-The bootstrap made and cancelled its own temporary token. Now cancel the one from Part 7 too, so no all-powerful
+The bootstrap made and cancelled its own temporary token. Now cancel the one from Part 8 too, so no all-powerful
 token exists:
 
 ```bash
@@ -591,7 +706,7 @@ unset BAO_TOKEN
 
 Then delete the initial root token from your password manager. (Keep the 3 recovery keys.)
 
-### 9.2 Back up the auto-unseal key
+### 10.2 Back up the auto-unseal key
 
 OpenBao unlocks itself after a reboot using a key file on ops01. **If ops01's disk is lost without a copy of this key,
 the vault can't be opened again, not even with the recovery keys.**
@@ -607,9 +722,9 @@ Save the output in your password manager as "OpenBao seal key homelab-1".
 
 ---
 
-## Part 10 — Test everything
+## Part 11 — Test everything
 
-### 10.1 A pull request runs checks (and not on your runner)
+### 11.1 A pull request runs checks (and not on your runner)
 
 🌐 In `homelab`, edit any doc (e.g. add a line to `README.md`) → **Commit changes…** → **Create a new branch** →
 **Propose changes** → **Create pull request**.
@@ -618,14 +733,14 @@ Save the output in your password manager as "OpenBao seal key homelab-1".
 they ran on GitHub's machines, not on `ops01`. That's on purpose: code that hasn't been reviewed never runs at home.
 Merge the PR (or close it).
 
-### 10.2 Direct pushes to `main` are blocked
+### 11.2 Direct pushes to `main` are blocked
 
 🌐 Open any file in `homelab` → pencil → change something → **Commit changes…**.
 
 ✅ **Check:** the option **Commit directly to the `main` branch** is blocked (or GitHub says the branch is protected).
 Cancel.
 
-### 10.3 The homelab pipeline works, with approval
+### 11.3 The homelab pipeline works, with approval
 
 🌐 `homelab` → **Actions** → **homelab** (left) → **Run workflow** → branch `main` → **Run workflow**.
 
@@ -634,7 +749,7 @@ Cancel.
 2. It runs on `ops01` and ends **green**. In the log: `== 1. OpenBao login` passes, every `PLAY RECAP` shows
    `failed=0`, and the last step prints `homelab_apps is empty: nothing to onboard.`
 
-### 10.4 The emergency stop works
+### 11.4 The emergency stop works
 
 If a pipeline ever does something you don't want, you stop the runner. Try it once now:
 
@@ -658,7 +773,7 @@ sudo systemctl start <the full name you noted>      # e.g. actions.runner.<your-
 
 ---
 
-## Part 11 — What next
+## Part 12 — What next
 
 - **Run an app on the homelab** (e.g. the hpa-demo autoscaling demo):
   1. In `homelab`, a PR that sets `homelab_apps: [hpa-demo]` in `ansible/inventory/group_vars/all.yml` → merge →
@@ -668,7 +783,15 @@ sudo systemctl start <the full name you noted>      # e.g. actions.runner.<your-
   3. Open `http://hpa-demo.<dev01-address>.nip.io` in your browser.
 - **Add your own app**: see the [devops-projects README](https://github.com/zulhardy-lab/devops-projects#adding-a-project).
 - **How the pipelines work, and why**: [AUTOMATION.md](AUTOMATION.md).
-- **Every time you log in to ops01** to run Ansible by hand: `eval "$(ssh-agent -s)" && ssh-add` first.
+- **You don't run Ansible by hand any more.** After setup, merging a PR that changes `ansible/` starts the homelab
+  pipeline, which runs the playbooks for you (after your `platform` approval). It logs in with its own 10-minute
+  certificate, so it doesn't need your key or the ssh-agent.
+  You only work on ops01 by hand for the few things the pipeline deliberately doesn't do:
+  - **updating the runner** (`runner.yml`): the pipeline can't restart the runner it's running on;
+  - **re-running the bootstrap** (e.g. after renaming a repo or workflow): it needs your recovery keys;
+  - **deleting** things and **fixing** problems.
+
+  Only then: `eval "$(ssh-agent -s)" && ssh-add` first.
 
 ---
 
@@ -676,7 +799,7 @@ sudo systemctl start <the full name you noted>      # e.g. actions.runner.<your-
 
 | You see | Likely cause | What to do |
 |---|---|---|
-| VMs can't `ping` each other or your PC | VM network is NAT / host-only, or wrong address | Use **Bridged** (Part 2.1); check the address, subnet and gateway you typed in the installer |
+| VMs can't `ping` each other or your PC | VM network is NAT / host-only, or wrong address | Use **Bridged** (Part 3.1); check the address, subnet and gateway you typed in the installer |
 | Ubuntu won't boot on Hyper-V ("no operating system" / Secure Boot error) | Wrong Secure Boot template | VM Settings → Security → template **Microsoft UEFI Certificate Authority** |
 | `Enter passphrase for key` during Ansible | ssh-agent not loaded in this terminal | `eval "$(ssh-agent -s)" && ssh-add` |
 | `Permission denied (publickey,password)` to prd01/dev01 | Key not copied | `ssh-copy-id <your-user>@<address>` again |
@@ -686,11 +809,11 @@ sudo systemctl start <the full name you noted>      # e.g. actions.runner.<your-
 | `kubectl`: "connection refused" / "permission denied" on ops01 | Terminal from before k3s was installed, or `k3s_admin_user` isn't you | Log out and in; check `k3s_admin_user` in `group_vars/all.yml` |
 | `bao`: `certificate signed by unknown authority` | Terminal from before OpenBao was installed | `source /etc/profile.d/openbao.sh` |
 | `bao status` shows `Sealed true` after a reboot | Seal key file missing or damaged | See [OPENBAO.md](OPENBAO.md), "Back up the auto-unseal key" (restore it) |
-| Runner registration fails (the error is hidden as `no_log`) | Expired token, token from a repo page instead of the org page, or `runner_org_url` not updated | Get a fresh **org** token (Part 8); check `runner_org_url`; the runner's own log: `sudo bash -c 'tail -n 30 "$(ls -t /opt/actions-runner/_diag/Runner_*.log \| head -1)"'` |
-| Bootstrap: `... CHECK` / `MISSING` | A GitHub setting or repo ID doesn't match | Fix the named environment (Part 3.3) or ID (Part 3.4), re-run the bootstrap |
-| Pipeline: `error validating claims` / `job_workflow_ref does not match` | OpenBao trusts a different repo/workflow than the job came from | Check `REPO`/`REPO_ID`/`PROJECTS_*` in the bootstrap (Part 3.4), commit via PR, `git pull` on ops01, re-run the bootstrap |
-| Pipeline: `has no required reviewers. Refusing to continue` | An approval gate lost its reviewer | Re-add yourself (Part 3.3) |
-| Job stuck on **Queued** | Runner offline, or the runner group doesn't allow this repo / public repos | Runner page shows Idle? Runner group settings (Part 3.6) |
+| Runner registration fails (the error is hidden as `no_log`) | Expired token, token from a repo page instead of the org page, or `runner_org_url` not updated | Get a fresh **org** token (Part 9); check `runner_org_url`; the runner's own log: `sudo bash -c 'tail -n 30 "$(ls -t /opt/actions-runner/_diag/Runner_*.log \| head -1)"'` |
+| Bootstrap: `... CHECK` / `MISSING` | A GitHub setting or repo ID doesn't match | Fix the named environment (Part 4.3) or ID (Part 4.4), re-run the bootstrap |
+| Pipeline: `error validating claims` / `job_workflow_ref does not match` | OpenBao trusts a different repo/workflow than the job came from | Check `REPO`/`REPO_ID`/`PROJECTS_*` in the bootstrap (Part 4.4), commit via PR, `git pull` on ops01, re-run the bootstrap |
+| Pipeline: `has no required reviewers. Refusing to continue` | An approval gate lost its reviewer | Re-add yourself (Part 4.3) |
+| Job stuck on **Queued** | Runner offline, or the runner group doesn't allow this repo / public repos | Runner page shows Idle? Runner group settings (Part 4.6) |
 | Job stuck on **Waiting** | It needs your approval | Open the run → **Review deployments** → approve |
 
 Still stuck? Note **which Part and step**, the **exact command**, and the **last 20 lines** of output.
@@ -720,7 +843,7 @@ Only for older setups where the runner was registered to **one repo** instead of
    ls /etc/systemd/system/ | grep actions.runner    # should print nothing
    ```
 
-4. Do [Part 8](#part-8--install-the-github-runner). While the runner is away, post-merge jobs wait in the queue.
+4. Do [Part 9](#part-9--install-the-github-runner). While the runner is away, post-merge jobs wait in the queue.
 
 ## Security notes
 
