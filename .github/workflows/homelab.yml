@@ -1,0 +1,39 @@
+name: homelab
+
+# After a merge that changes the homelab setup, apply the Ansible playbooks to every VM
+# (base.yml, k3s.yml, openbao.yml, automation-access.yml). HIGH RISK, so it waits for approval
+# (GitHub environment "platform"). Runs on ops01's runner. Gets a 10-minute SSH certificate from OpenBao via GitHub OIDC
+# (scripts/ci-homelab.sh). No stored keys or passwords.
+#
+# NOTE: OpenBao only accepts GitHub tokens from this file (and apps.yml) on main.
+#       Renaming it breaks the pipeline until scripts/bootstrap-automation.sh is updated and re-run.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ansible/**"
+      - "scripts/ci-homelab.sh"
+      - "scripts/lib/**"
+      - ".github/workflows/homelab.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, homelab]
+    environment: platform # approval required; OpenBao's "platform" role only accepts this environment
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      id-token: write # lets this job ask GitHub for an OIDC token, which OpenBao checks
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Apply playbooks
+        run: bash scripts/ci-homelab.sh

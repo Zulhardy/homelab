@@ -1,0 +1,143 @@
+---
+# Lets the homelab pipeline manage every VM without any stored key or password:
+# - an "automation" user with passwordless sudo and NO password / authorized_keys
+# - sshd trusts certificates signed by OpenBao's SSH CA, and only for the "automation" principal
+# - the runner user knows the VMs' host keys
+# The pipeline gets a certificate valid for 10 minutes per run (scripts/ci-homelab.sh).
+
+- name: Read OpenBao's SSH CA public key
+  hosts: control
+  become: true
+  tasks:
+    - name: Fetch the SSH CA public key (public information, no token needed)
+      ansible.builtin.uri:
+        url: "{{ openbao_addr }}/v1/{{ automation_ssh_ca_mount }}/public_key"
+        ca_path: /etc/openbao/tls-ca.crt
+        return_content: true
+      register: ssh_ca
+      check_mode: false
+
+    - name: Stop if OpenBao has no SSH CA yet
+      ansible.builtin.assert:
+        that:
+          - ssh_ca.content is match('^ssh-')
+        fail_msg: "OpenBao's SSH CA isn't set up yet. Run scripts/bootstrap-automation.sh first."
+
+    - name: Remember the CA key for all hosts
+      ansible.builtin.set_fact:
+        automation_ssh_ca_pubkey: "{{ ssh_ca.content | trim }}"
+      delegate_to: "{{ item }}"
+      delegate_facts: true
+      loop: "{{ groups['homelab'] }}"
+
+- name: Automation user and SSH certificate trust
+  hosts: homelab
+  become: true
+  tasks:
+    - name: Create the automation user (no password, no authorized keys)
+      ansible.builtin.user:
+        name: "{{ automation_user }}"
+        shell: /bin/bash
+        password: "!"
+        password_lock: true
+        create_home: true
+
+    - name: Passwordless sudo for the automation user
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/90-automation
+        mode: "0440"
+        owner: root
+        group: root
+        content: |
+          # Managed by Ansible (homelab repo). Only reachable with a 10-minute OpenBao-signed SSH certificate.
+          {{ automation_user }} ALL=(ALL) NOPASSWD: ALL
+
+    - name: Check the sudoers file is valid
+      ansible.builtin.command: "visudo -cf /etc/sudoers.d/90-automation"
+      changed_when: false
+
+    - name: Install the OpenBao SSH CA public key
+      ansible.builtin.copy:
+        dest: /etc/ssh/openbao-user-ca.pub
+        mode: "0644"
+        content: "{{ automation_ssh_ca_pubkey }}\n"
+      notify: Reload sshd
+
+    - name: Create the principals directory
+      ansible.builtin.file:
+        path: /etc/ssh/auth_principals
+        state: directory
+        mode: "0755"
+
+    - name: Only the automation user accepts certificates, and only for its own principal
+      ansible.builtin.copy:
+        dest: "/etc/ssh/auth_principals/{{ automation_user }}"
+        mode: "0644"
+        content: "{{ automation_user }}\n"
+
+    - name: Trust OpenBao-signed user certificates (users without a principals file can't use certificates)
+      block:
+        - name: Write the sshd drop-in
+          ansible.builtin.copy:
+            dest: /etc/ssh/sshd_config.d/60-openbao-ca.conf
+            mode: "0644"
+            content: |
+              # Managed by Ansible (homelab repo)
+              TrustedUserCAKeys /etc/ssh/openbao-user-ca.pub
+              AuthorizedPrincipalsFile /etc/ssh/auth_principals/%u
+          notify: Reload sshd
+
+        - name: Validate the complete sshd configuration
+          ansible.builtin.command: sshd -t
+          changed_when: false
+      rescue:
+        - name: Remove the drop-in again so SSH keeps working
+          ansible.builtin.file:
+            path: /etc/ssh/sshd_config.d/60-openbao-ca.conf
+            state: absent
+
+        - name: Stop here
+          ansible.builtin.fail:
+            msg: "sshd rejected the new configuration; the change was removed and SSH is unchanged."
+
+  handlers:
+    - name: Reload sshd
+      # Ubuntu starts sshd on demand; try-reload-or-restart does nothing harmful if it isn't running.
+      ansible.builtin.command: systemctl try-reload-or-restart ssh.service # noqa: command-instead-of-module
+      changed_when: true
+
+- name: Runner knows the VMs' SSH host keys
+  hosts: control
+  become: true
+  tasks:
+    - name: Create the runner's .ssh directory
+      ansible.builtin.file:
+        path: "/home/{{ runner_user }}/.ssh"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: "0700"
+
+    - name: Read host keys (the control node via 127.0.0.1, the others via their IP)
+      ansible.builtin.command: "ssh-keyscan -t ed25519 {{ '127.0.0.1' if item in groups['control'] else hostvars[item].k3s_node_ip }}"
+      loop: "{{ groups['homelab'] }}"
+      register: host_keys
+      changed_when: false
+      check_mode: false
+
+    - name: Write the runner's known_hosts
+      ansible.builtin.known_hosts:
+        path: "/home/{{ runner_user }}/.ssh/known_hosts"
+        name: "{{ item.stdout.split()[0] }}"
+        key: "{{ item.stdout }}"
+        state: present
+      loop: "{{ host_keys.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Known hosts file belongs to the runner
+      ansible.builtin.file:
+        path: "/home/{{ runner_user }}/.ssh/known_hosts"
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: "0644"

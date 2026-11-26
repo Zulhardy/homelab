@@ -1,27 +1,12 @@
 ---
-# Docker from Docker's official apt repo, pinned to the versions already running on docker01
-# (read from `dpkg -l` on docker01, 2026-11-26). Packages are also put on apt "hold".
-docker_repo_url: "https://download.docker.com/linux/ubuntu"
-docker_gpg_url: "https://download.docker.com/linux/ubuntu/gpg"
-# [Unverified] Docker's published signing-key fingerprint, written from memory.
-# The playbook stops if the downloaded key does not match, so a wrong value fails safe.
-docker_gpg_fingerprint: "9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
-docker_pkg_suffix: "~ubuntu.26.04~resolute"
-docker_packages:
-  - "docker-ce=5:29.10.0-1{{ docker_pkg_suffix }}"
-  - "docker-ce-cli=5:29.10.0-1{{ docker_pkg_suffix }}"
-  - "containerd.io=2.4.2-4{{ docker_pkg_suffix }}"
-  - "docker-buildx-plugin=0.39.1-1{{ docker_pkg_suffix }}"
-  - "docker-compose-plugin=5.8.0-1{{ docker_pkg_suffix }}"
-
 # GitHub Actions self-hosted runner (pinned version + checksum).
 # Checksum computed from the release tarball on 2026-11-26.
 runner_version: "2.338.2"
 runner_sha256: "baebf204307bac6193480852732f0aba2ae97b6c5597c244f4d5558390147c40"
 runner_user: gha-runner
 runner_dir: /opt/actions-runner
-runner_name: docker01
-runner_labels: "homelab,docker01"
+runner_name: ops01
+runner_labels: "homelab,ops01"
 
 runner_repo_url: "https://github.com/zulhardy/homelab"
 
@@ -30,10 +15,14 @@ runner_repo_url: "https://github.com/zulhardy/homelab"
 k3s_version: "v1.37.2+k3s1"
 k3s_sha256: "265b3ee6a3198ef14033c63ef46cbb32370d83795199fb6d1b01f21575eddbda"
 k3s_server_ip: "192.168.0.102"
-k3s_admin_user: zulhardy # gets a kubeconfig on docker01 (cluster admin)
+k3s_admin_user: zulhardy # gets a kubeconfig on ops01 (cluster admin)
 
-# OpenBao (secrets vault) on docker01, official .deb from the GitHub release, pinned + checksum.
+# OpenBao (secrets vault) on ops01, official .deb from the GitHub release, pinned + checksum.
 # Checksum from the release's checksums.txt, and re-computed from the .deb, on 2026-11-26.
 openbao_version: "2.7.3"
 openbao_deb_sha256: "0800c71469c1d7a5d5c9fb37ce0e441cad97d9fe122dab70391c8371e290b935"
 openbao_addr: "https://127.0.0.1:8200"
+
+# Pipeline access to the VMs (see ansible/playbooks/automation-access.yml)
+automation_user: automation
+automation_ssh_ca_mount: ssh-client-signer # OpenBao SSH engine that signs the pipeline's 10-minute certificates

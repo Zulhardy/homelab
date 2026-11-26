@@ -1,23 +1,36 @@
 #!/usr/bin/env bash
-# Builds and pushes the hpa-demo image to GitHub Container Registry (GHCR).
-# Called by .github/workflows/hpa-demo-image.yml. Expects GITHUB_TOKEN and GITHUB_ACTOR in the environment;
-# the token is GitHub's short-lived per-run token, never a stored secret.
+# build-image.sh APP -> builds apps/APP/app (Dockerfile), runs the integration test and the image security scan
+# against the built image, and only then pushes it to GHCR. Skips if:
+#   - the app has no Dockerfile (it uses a ready-made image), or
+#   - the image for that commit already exists (only manifests or scripts changed): then it's pulled, tested and
+#     scanned again instead, and not pushed.
+# Expects GITHUB_TOKEN (GitHub's short-lived per-run token) and GITHUB_ACTOR.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+app="${1:?usage: build-image.sh APP}"
 
-image="$(scripts/hpa-demo-image-tag.sh)"
-echo "Building ${image}"
-
-echo "${GITHUB_TOKEN:?GITHUB_TOKEN not set}" | docker login ghcr.io -u "${GITHUB_ACTOR:?GITHUB_ACTOR not set}" --password-stdin
-trap 'docker logout ghcr.io >/dev/null' EXIT
-
-# The tag is the last commit that changed the app. If only manifests or scripts changed, that image
-# already exists: reuse it instead of building a different image under the same tag.
-if docker manifest inspect "${image}" >/dev/null 2>&1; then
-  echo "${image} already exists, not rebuilding."
+if [ ! -f "apps/${app}/app/Dockerfile" ]; then
+  echo "apps/${app}/app/Dockerfile not found: nothing to build."
   exit 0
 fi
 
-docker build --platform linux/amd64 -t "${image}" apps/hpa-demo/app
+image="$(scripts/image-tag.sh "${app}")"
+echo "${GITHUB_TOKEN:?GITHUB_TOKEN not set}" | docker login ghcr.io -u "${GITHUB_ACTOR:?GITHUB_ACTOR not set}" --password-stdin
+trap 'docker logout ghcr.io >/dev/null' EXIT
+
+if docker manifest inspect "${image}" >/dev/null 2>&1; then
+  echo "${image} already exists: not rebuilding, but testing and scanning it again (new vulnerabilities appear over time)."
+  docker pull -q "${image}" >/dev/null
+  scripts/integration-test.sh "${app}" "${image}"
+  scripts/security-scan.sh image "${image}"
+  exit 0
+fi
+
+# The source label links the package to this public repo (that's what makes it public and visible there).
+docker build --platform linux/amd64 \
+  --label "org.opencontainers.image.source=https://github.com/Zulhardy/homelab" \
+  -t "${image}" "apps/${app}/app"
+scripts/integration-test.sh "${app}" "${image}"
+scripts/security-scan.sh image "${image}"
 docker push "${image}"
 echo "Pushed ${image}"

@@ -1,5 +1,9 @@
 ---
-# Installs a 2-node k3s cluster: docker01 = server (control plane), linux01 = agent (workloads).
+# Installs the k3s cluster: ops01 = server (control plane, no app pods), prd01 / dev01 = agents (PRD / DEV apps).
+# Node names are pinned to the inventory names. Each agent gets the label node-restriction.kubernetes.io/env=<k3s_env>,
+# set by the server (a node can't set labels under that prefix on itself, so a compromised dev01 can't claim "prd").
+# The API server's PodNodeSelector plugin then forces every pod in a namespace annotated with that label onto
+# matching nodes (scripts/onboard-app.sh annotates <app>-dev and <app>-prd).
 # Downloads the pinned k3s binary straight from the GitHub release and verifies its checksum.
 # Does NOT use the get.k3s.io install script (unpinned remote script).
 
@@ -53,12 +57,16 @@
         dest: /etc/rancher/k3s/config.yaml
         mode: "0644"
         content: |
+          node-name: "{{ inventory_hostname }}"
           node-ip: "{{ k3s_node_ip }}"
           advertise-address: "{{ k3s_node_ip }}"
           tls-san:
             - "{{ k3s_node_ip }}"
             - "{{ inventory_hostname }}"
           write-kubeconfig-mode: "0600"
+          kube-apiserver-arg:
+            # PodNodeSelector: a namespace's node-selector annotation is forced onto all its pods (DEV/PRD separation)
+            - "enable-admission-plugins=NodeRestriction,PodNodeSelector"
       notify: Restart k3s
 
     - name: Install k3s server systemd unit
@@ -161,6 +169,7 @@
         content: |
           server: "https://{{ k3s_server_ip }}:6443"
           token: "{{ hostvars[groups['k3s_server'][0]]['k3s_join_token'] }}"
+          node-name: "{{ inventory_hostname }}"
           node-ip: "{{ k3s_node_ip }}"
       no_log: true
       when: not ansible_check_mode
@@ -191,18 +200,57 @@
   hosts: k3s_server
   become: true
   tasks:
-    - name: Wait until both nodes are Ready
-      ansible.builtin.command: kubectl get nodes --no-headers
+    - name: Wait until every inventory node is Ready (old entries from a rename are ignored here)
+      ansible.builtin.command:
+        argv: "{{ ['kubectl', 'get', 'nodes', '--no-headers'] + groups['k3s_cluster'] }}"
       register: k3s_nodes
+      failed_when: false
       until: >-
-        (k3s_nodes.stdout_lines | length) == (groups['k3s_cluster'] | length)
+        k3s_nodes.rc == 0
         and (k3s_nodes.stdout_lines | select('search', ' Ready ') | list | length) == (groups['k3s_cluster'] | length)
       retries: 30
       delay: 10
       changed_when: false
       when: not ansible_check_mode
 
+    - name: Stop if a node never became Ready
+      ansible.builtin.assert:
+        that:
+          - k3s_nodes.rc == 0
+          - (k3s_nodes.stdout_lines | select('search', ' Ready ') | list | length) == (groups['k3s_cluster'] | length)
+        fail_msg: "Not every node is Ready: {{ k3s_nodes.stdout_lines + k3s_nodes.stderr_lines }}"
+      when: not ansible_check_mode
+
     - name: Show nodes
       ansible.builtin.debug:
         var: k3s_nodes.stdout_lines
       when: not ansible_check_mode
+
+    - name: Label app nodes with their environment (only the server may set this label)
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - label
+          - node
+          - "{{ item }}"
+          - "node-restriction.kubernetes.io/env={{ hostvars[item].k3s_env }}"
+          - --overwrite
+      loop: "{{ groups['k3s_agent'] }}"
+      register: k3s_label
+      changed_when: "'labeled' in k3s_label.stdout and 'not labeled' not in k3s_label.stdout"
+      when: not ansible_check_mode
+
+    - name: Nodes still registered under a name that is not in the inventory (e.g. after a rename)
+      ansible.builtin.command: kubectl get nodes -o jsonpath='{.items[*].metadata.name}'
+      register: k3s_all_nodes
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Tell the human about old node entries (removing them is a manual step)
+      ansible.builtin.debug:
+        msg: >-
+          Old node entries: {{ k3s_all_nodes.stdout.split() | difference(groups['k3s_cluster']) }}.
+          Remove them yourself: docs/K3S.md, "Renaming nodes".
+      when:
+        - not ansible_check_mode
+        - k3s_all_nodes.stdout.split() | difference(groups['k3s_cluster']) | length > 0
