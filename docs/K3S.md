@@ -49,7 +49,7 @@ kubectl get pods -A -o wide                               # app pods: *-dev on d
 kubectl top nodes
 ```
 
-`~/.kube/config` on ops01 is a **cluster-admin** credential, readable only by `zulhardy`. Never commit it.
+`~/.kube/config` on ops01 is a **cluster-admin** credential, readable only by your admin user (`k3s_admin_user` in `group_vars/all.yml`). Never commit it.
 
 ## Renaming nodes
 

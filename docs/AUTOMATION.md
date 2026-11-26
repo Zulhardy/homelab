@@ -61,8 +61,8 @@ GitHub repo → **Settings → Environments → New environment**, three times:
 | Name | Required reviewers | Deployment branches |
 |---|---|---|
 | `dev` | none | **Selected branches** → `main` |
-| `prd` | **Zulhardy** (tick "Prevent self-review" off, since you're the only reviewer) | **Selected branches** → `main` |
-| `platform` | **Zulhardy** | **Selected branches** → `main` |
+| `prd` | **yourself** (your GitHub user; leave "Prevent self-review" off if you're the only reviewer) | **Selected branches** → `main` |
+| `platform` | **yourself** | **Selected branches** → `main` |
 
 The names must match exactly: OpenBao checks them.
 
@@ -72,7 +72,7 @@ tests and scans). You can keep `lint` too.
 ### 2. Bootstrap
 
 Something has to grant the pipelines their powers the first time. That's
-[`scripts/bootstrap-automation.sh`](../scripts/bootstrap-automation.sh). Run it on **ops01**, as `zulhardy`
+[`scripts/bootstrap-automation.sh`](../scripts/bootstrap-automation.sh). Run it on **ops01**, as your own admin user
 (not with sudo), from the repo folder. It asks for your **sudo password** and **2 of your 3 OpenBao keys** (all
 hidden), then:
 

@@ -139,7 +139,7 @@ To stop all post-merge jobs instead: `sudo systemctl stop 'actions.runner.*'`.
 The UI only listens on ops01's loopback. From your PC, open an SSH tunnel and browse to it:
 
 ```bash
-ssh -L 8200:127.0.0.1:8200 zulhardy@192.168.0.102
+ssh -L 8200:127.0.0.1:8200 <your-user>@192.168.0.102
 # then open https://127.0.0.1:8200/ui on your PC (accept the self-signed certificate warning)
 ```
 
