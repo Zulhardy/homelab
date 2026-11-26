@@ -9,7 +9,10 @@ Every step that involves a password, key, or token is yours to do. The agent nev
 
 ## Before you start
 
-Three VMs (Hyper-V, Ubuntu 26.04.1 LTS, 4 CPU / 8 GB RAM each). `base.yml` sets the hostnames from the inventory.
+Three VMs (Hyper-V, Ubuntu 26.04.1 LTS). Sizes on the author's homelab: ops01 4 GB RAM, prd01 and dev01 2 GB each,
+2 or more CPUs each, Hyper-V Dynamic Memory off (Kubernetes plans around the memory it sees at start).
+Minimums and why: k3s needs 2 GB for a server and 512 MB for an agent, plus the OS and your apps.
+`base.yml` sets the hostnames from the inventory.
 
 | VM | IP | Role |
 |---|---|---|
@@ -20,7 +23,7 @@ Three VMs (Hyper-V, Ubuntu 26.04.1 LTS, 4 CPU / 8 GB RAM each). `base.yml` sets 
 - [ ] All VMs have fixed IPs (static or DHCP reservation in your router).
 - [ ] All VMs can reach the internet (outbound HTTPS).
 - [ ] ops01 can reach prd01 and dev01 over SSH on port 22.
-- [ ] The same user (`zulhardy`) exists on every VM. Using the same sudo password on all three keeps the
+- [ ] The same admin user exists on every VM: **your own account** (called `<your-user>` below). Using the same sudo password on all three keeps the
       bootstrap to one password prompt.
 - Docker is **not** needed on the VMs (images are built on GitHub's runners; k3s has its own runtime).
 
@@ -39,7 +42,7 @@ Three VMs (Hyper-V, Ubuntu 26.04.1 LTS, 4 CPU / 8 GB RAM each). `base.yml` sets 
 
 ## Step 2 — Prepare ops01 (control node)
 
-Run on ops01 as `zulhardy`:
+Run on ops01, logged in as `<your-user>`:
 
 ```bash
 # Ansible + git from Ubuntu's repositories
@@ -48,18 +51,18 @@ sudo apt install -y ansible git
 
 # SSH key for VM1 -> VM2 (this is YOUR key as the admin; protect it with a passphrase)
 ssh-keygen -t ed25519 -C "ops01-admin"
-ssh-copy-id zulhardy@192.168.0.103        # prd01: asks for its account password (last time it will)
-ssh-copy-id zulhardy@192.168.0.104        # dev01: same
+ssh-copy-id <your-user>@192.168.0.103        # prd01: asks for its account password (last time it will)
+ssh-copy-id <your-user>@192.168.0.104        # dev01: same
 
 # Load the key into ssh-agent so neither you nor Ansible gets the passphrase prompt.
 # Repeat these two lines each time you log in to ops01.
 eval "$(ssh-agent -s)"
 ssh-add                                   # type the key's passphrase once
 
-ssh zulhardy@192.168.0.103 'hostname'     # prints the hostname, with no prompt
-ssh zulhardy@192.168.0.104 'hostname'
+ssh <your-user>@192.168.0.103 'hostname'     # prints the hostname, with no prompt
+ssh <your-user>@192.168.0.104 'hostname'
 # If it asks "Enter passphrase for key ...", the agent isn't loaded: run the two lines above.
-# If it asks "zulhardy@192.168.0.103's password", ssh-copy-id didn't work: run it again.
+# If it asks "<your-user>@192.168.0.103's password", ssh-copy-id didn't work: run it again.
 
 # Ansible uses sudo on the other VMs (you type the sudo password with -K)
 ```
@@ -69,7 +72,7 @@ ssh zulhardy@192.168.0.104 'hostname'
 The repo is public, so no key is needed to clone it:
 
 ```bash
-git clone https://github.com/zulhardy/homelab.git ~/homelab
+git clone https://github.com/<your-github-user>/<your-repo>.git ~/homelab
 ```
 
 ## Step 4 — Fill in the placeholders
@@ -77,7 +80,7 @@ git clone https://github.com/zulhardy/homelab.git ~/homelab
 Edit on ops01 (and later commit through a PR):
 
 - `ansible/inventory/hosts.ini` → already filled in (ops01 / prd01 / dev01)
-- `ansible/inventory/group_vars/all.yml` → already filled in (`zulhardy/homelab`)
+- `ansible/inventory/group_vars/all.yml` → your repo URL and admin user (see "Using this repo for your own homelab" below)
 
 ## Step 5 — Check Ansible reaches every VM
 
@@ -109,8 +112,8 @@ ansible-playbook playbooks/runner.yml -K
 - [ ] Open a test PR → the checks run on GitHub-hosted runners (not ops01) and `quality` passes.
 - [ ] Try `git push origin main` directly → it is rejected (branch protection).
 - [x] Emergency stop (tested 2026-11-26, as docker01). On ops01:
-      - Stop: `sudo systemctl stop actions.runner.zulhardy-homelab.<runner name>.service` → runner shows **Offline** in GitHub
-      - Start: `sudo systemctl start actions.runner.zulhardy-homelab.<runner name>.service` → back to **Idle**
+      - Stop: `sudo systemctl stop actions.runner.<owner>-<repo>.<runner name>.service` → runner shows **Offline** in GitHub
+      - Start: `sudo systemctl start actions.runner.<owner>-<repo>.<runner name>.service` → back to **Idle**
       - `<runner name>` is `docker01` if the runner was registered before the rename, `ops01` if after
         (`systemctl list-units 'actions.runner.*'` shows it).
       - Use the full service name. A pattern like `'actions.runner.*'` works for stop but not for start,
@@ -126,3 +129,22 @@ ansible-playbook playbooks/runner.yml -K
 - The inventory contains private LAN addresses (192.168.0.x) and your username. These are not secrets, but they are public.
 - Your admin SSH key on ops01 can reach prd01 and dev01. The pipeline uses its own `automation` user with 10-minute
   certificates instead ([AUTOMATION.md](AUTOMATION.md)).
+
+## Using this repo for your own homelab
+
+The commands above use placeholders: `<your-user>` is **your own** Linux admin account on the VMs (the same on all
+three), `<your-github-user>/<your-repo>` is your fork or copy. The code itself contains the author's values. Change
+them in a pull request before running anything:
+
+| File | Value to change |
+|---|---|
+| `ansible/inventory/hosts.ini` | `ansible_user=` on prd01 and dev01 → `<your-user>`; IP addresses if yours differ |
+| `ansible/inventory/automation.ini` | IP addresses if yours differ (the `automation` user stays) |
+| `ansible/inventory/group_vars/all.yml` | `runner_repo_url` → your repo; `k3s_admin_user` → `<your-user>` |
+| `scripts/bootstrap-automation.sh` | `REPO_ID` (your repo's numeric ID: `gh api repos/<owner>/<repo> --jq .id`), `WF_PREFIX`, and the repo name in the GitHub environments check |
+| `scripts/lib/ci-openbao-login.sh` | `GITHUB_REPO_API` → your repo |
+| `scripts/image-tag.sh`, `scripts/build-image.sh`, `apps/*/app/Dockerfile` | `ghcr.io/zulhardy` and the image source label → your GitHub user and repo |
+| `scripts/lib/envs.sh`, `scripts/deploy.sh` comments | DEV / PRD node IP addresses if yours differ |
+
+GitHub environments and the `protect-main` ruleset are repo settings; create them in your repo
+([AUTOMATION.md](AUTOMATION.md#one-time-setup-manual-once)) with **yourself** as the required reviewer.
