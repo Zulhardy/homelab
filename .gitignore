@@ -1,0 +1,25 @@
+# Secrets and keys — never commit
+*.pem
+*.key
+id_*
+!id_*.pub
+.env
+.env.*
+*.vault
+vault-pass*
+
+# Terraform (Phase 2)
+*.tfstate
+*.tfstate.*
+.terraform/
+*.tfvars
+!example.tfvars
+
+# Ansible
+*.retry
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
