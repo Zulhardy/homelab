@@ -1,0 +1,33 @@
+name: hpa-demo image
+
+# Builds the demo app image and publishes it to GitHub Container Registry
+# when a change to the app is merged into main.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/hpa-demo/app/**"
+      - "scripts/build-image.sh"
+      - "scripts/hpa-demo-image-tag.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write # push to ghcr.io/zulhardy/hpa-demo with the short-lived GITHUB_TOKEN
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (full history, needed to compute the image tag)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Build and push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: bash scripts/build-image.sh
