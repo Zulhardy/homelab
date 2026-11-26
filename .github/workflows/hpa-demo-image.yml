@@ -1,24 +1,33 @@
-name: hpa-demo image
+name: hpa-demo build and deploy
 
-# Builds the demo app image and publishes it to GitHub Container Registry
-# when a change to the app is merged into main.
+# After a change to hpa-demo is merged into main:
+#   build  (GitHub-hosted runner) : build the image and push it to GHCR (skipped if it already exists)
+#   deploy (docker01 runner)      : log in to OpenBao with GitHub's OIDC token, get a 10-minute
+#                                   Kubernetes token, deploy, check the rollout
+# NOTE: OpenBao only accepts GitHub tokens from THIS file on main (job_workflow_ref).
+#       Renaming or moving this file breaks deploys until scripts/openbao-setup.sh is updated and re-run.
 on:
   push:
     branches: [main]
     paths:
-      - "apps/hpa-demo/app/**"
+      - "apps/hpa-demo/**"
       - "scripts/build-image.sh"
       - "scripts/hpa-demo-image-tag.sh"
+      - "scripts/hpa-demo.sh"
+      - "scripts/ci-deploy-hpa-demo.sh"
+      - ".github/workflows/hpa-demo-image.yml"
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write # push to ghcr.io/zulhardy/hpa-demo with the short-lived GITHUB_TOKEN
 
 jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io/zulhardy/hpa-demo with the short-lived GITHUB_TOKEN
     steps:
       - name: Checkout (full history, needed to compute the image tag)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,3 +40,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_ACTOR: ${{ github.actor }}
         run: bash scripts/build-image.sh
+
+  deploy:
+    needs: build
+    # Only after a merge to main (or a manual run on main). Never for pull requests.
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, homelab, docker01]
+    timeout-minutes: 15
+    concurrency:
+      group: deploy-hpa-demo
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # lets this job ask GitHub for an OIDC token, which OpenBao checks
+    steps:
+      - name: Checkout (full history, needed to compute the image tag)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Deploy to k3s
+        run: bash scripts/ci-deploy-hpa-demo.sh

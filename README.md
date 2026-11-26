@@ -65,6 +65,7 @@ k3s ports between the nodes: 6443/tcp (Kubernetes API), 8472/udp (Flannel VXLAN 
 | **Service discovery** | CoreDNS (bundled) | bundled | Cluster | Lets pods find Services by name, e.g. `http://hpa-demo.hpa-demo.svc` | k3s |
 | **Container registry** | GitHub Container Registry (GHCR) | n/a | Cloud | Stores the images built by the pipeline; the cluster pulls from here | Project pipelines |
 | **Secrets & supply chain** | GitHub secret scanning + push protection; pinning | n/a | Cloud + repo | Blocks pushes containing known secret types. Runner and k3s verified by SHA-256, base images pinned by digest, Actions pinned by commit SHA | Repo settings, playbooks |
+| **Secrets vault / credential broker** | OpenBao | 2.7.3 | docker01, 127.0.0.1:8200 only | Exchanges the deploy job's GitHub OIDC token for a 10-minute Kubernetes token. Sealed after every restart until unsealed with 2 of 3 keys | [`openbao.yml`](ansible/playbooks/openbao.yml), [`openbao-setup.sh`](scripts/openbao-setup.sh), [OPENBAO.md](docs/OPENBAO.md) |
 | **Monitoring** | `kubectl top` via metrics-server | bundled | Cluster | Live CPU/memory per node and pod. No dashboards or alerting yet | n/a |
 
 ### How each layer is secured
@@ -75,14 +76,14 @@ k3s ports between the nodes: 6443/tcp (Kubernetes API), 8472/udp (Flannel VXLAN 
 | Pipeline | PR checks run on GitHub's runners, never on the homelab; fork PR workflows need approval; per-run tokens with minimum permissions (`contents: read`, `packages: write` only where needed) |
 | Runner | Runs as non-root `gha-runner`; its directory is readable only by that user; reserved for post-merge jobs |
 | VMs | Admin SSH by key; sudo still requires a password; Ansible uses classic `sudo.ws` (see [`ansible.cfg`](ansible/ansible.cfg)) |
-| Kubernetes | Admin kubeconfig on docker01 only (mode 0600); agent join token in a root-only file; project pods run non-root with read-only filesystems and no capabilities |
+| Kubernetes | Admin kubeconfig on docker01 only (mode 0600); agent join token in a root-only file; the pipeline only ever gets 10-minute tokens for a per-project `deployer` account (no secrets, no deletes, one namespace); project pods run non-root with read-only filesystems and no capabilities |
+| Secrets | OpenBao on loopback only, TLS; root token revoked after setup; unseal keys held by the human in a password manager |
 | Supply chain | No `latest` tags anywhere; downloads verified by checksum or digest; no `curl \| sh` install scripts |
 
 ### Planned
 
 | Component | Purpose |
 |---|---|
-| Automatic deploy job on the docker01 runner, with a limited Kubernetes credential | Turn stage 4 of the pipeline (deploy) from manual into CD |
 | LitmusChaos (pinned 3.33.0) | Chaos experiments, e.g. killing pods to show self-healing |
 | Monitoring dashboards (e.g. Prometheus + Grafana) | History and alerts instead of only live `kubectl top` |
 
@@ -103,7 +104,7 @@ to try them.
 
 | Project | What it is | Folder and docs | Pipeline | Package |
 |---|---|---|---|---|
-| **hpa-demo** | Load balancing and autoscaling on Kubernetes (1 → 5 → 1 pods under load). Runs on any Kubernetes cluster with metrics-server. | [apps/hpa-demo](apps/hpa-demo/README.md) | [`hpa-demo-image.yml`](.github/workflows/hpa-demo-image.yml): on merge to `main` that changes the app, GitHub-hosted runner builds and pushes the image | [`ghcr.io/zulhardy/hpa-demo`](https://github.com/zulhardy/homelab/pkgs/container/hpa-demo) |
+| **hpa-demo** | Load balancing and autoscaling on Kubernetes (1 → 5 → 1 pods under load). Runs on any Kubernetes cluster with metrics-server. | [apps/hpa-demo](apps/hpa-demo/README.md) | [`hpa-demo-image.yml`](.github/workflows/hpa-demo-image.yml): on merge to `main` that changes hpa-demo, builds and pushes the image (GitHub-hosted runner), then deploys it automatically (docker01 runner, via OpenBao) | [`ghcr.io/zulhardy/hpa-demo`](https://github.com/zulhardy/homelab/pkgs/container/hpa-demo) |
 
 ## How the CI/CD pipeline works
 
@@ -119,7 +120,9 @@ flowchart LR
     E -->|"homelab files"| F["Human runs the playbook on docker01"]
     E -->|"project app"| G["Build - hpa-demo-image.yml"]
     G --> H["Publish image to GHCR"]
-    H --> I["Deploy to k3s - by hand for now"]
+    H --> J["Deploy job on docker01 runner"]
+    J --> K["OpenBao - 10-minute Kubernetes token"]
+    K --> I["Deploy to k3s and check the rollout"]
 ```
 
 | Stage | Type | Where it runs | Triggered by | Gate |
@@ -128,7 +131,7 @@ flowchart LR
 | **2. Review and merge** | Manual | GitHub | A human | Only humans merge; direct pushes to `main` are blocked |
 | **3a. Apply homelab changes** (Ansible playbooks) | Manual CD | docker01 | A human running `ansible-playbook ... -K` | Needs the human's sudo password |
 | **3b. Build and publish a project image** ([`hpa-demo-image.yml`](.github/workflows/hpa-demo-image.yml) → [`scripts/build-image.sh`](scripts/build-image.sh)) | CI/CD | GitHub-hosted runner | Merge to `main` that changes the project's app | Uses GitHub's short-lived per-run token, `packages: write` only |
-| **4. Deploy the project** ([`scripts/hpa-demo.sh`](scripts/hpa-demo.sh) `deploy`) | CD (manual for now) | docker01, using `kubectl` | A human | Deploys exactly the image tag built in 3b |
+| **4. Deploy the project** ([`scripts/ci-deploy-hpa-demo.sh`](scripts/ci-deploy-hpa-demo.sh) → [`scripts/hpa-demo.sh`](scripts/hpa-demo.sh) `deploy`) | **CD, automatic** | docker01 self-hosted runner | Stage 3b succeeding | Logs in to OpenBao with GitHub's OIDC token, gets a 10-minute Kubernetes token limited to the project's namespace, deploys exactly the image tag from 3b, and fails if the rollout isn't healthy |
 
 Design choices:
 
@@ -139,8 +142,10 @@ Design choices:
   same tag, so what's deployed is always what was built.
 - **Pull requests never run on the homelab.** The repo is public, so PR checks use GitHub's runners. The
   self-hosted runner on docker01 is reserved for post-merge jobs.
-- **Next step:** an automatic deploy job (stage 4) on the docker01 runner after merge, using its own limited
-  Kubernetes credential instead of the admin one.
+- **No stored deploy credentials.** The deploy job proves who it is with GitHub's OIDC token; OpenBao checks the
+  repo, branch and workflow file, then hands out a Kubernetes token that expires after 10 minutes
+  (see [docs/OPENBAO.md](docs/OPENBAO.md)).
+- **If OpenBao is sealed** (e.g. after a docker01 reboot), deploys fail with a clear message until you unseal it.
 
 ## Layout
 
@@ -151,6 +156,7 @@ scripts/              Pipeline and demo logic (workflow YAML only calls these)
 .github/workflows/    Thin CI/CD wrappers
 docs/BOOTSTRAP.md     One-time manual setup of the VMs and the repo
 docs/K3S.md           The Kubernetes cluster: install, check, stop/start
+docs/OPENBAO.md       The secrets vault: install, initialise, unseal, GitHub OIDC + Kubernetes setup
 CLAUDE.md             Rules for the AI agent working in this repo
 ```
 
@@ -170,6 +176,7 @@ CLAUDE.md             Rules for the AI agent working in this repo
 
 1. [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md): GitHub repo settings, SSH, Docker, runner
 2. [docs/K3S.md](docs/K3S.md): the Kubernetes cluster
+3. [docs/OPENBAO.md](docs/OPENBAO.md): the secrets vault used by automatic deploys
 
 Projects in `apps/` have their own READMEs (see [Projects and packages](#projects-and-packages-built-and-tested-on-the-homelab-not-part-of-it)).
 
@@ -180,7 +187,7 @@ A human reviews and merges.
 
 ## Known gaps
 
-- No automatic deploy to the cluster yet. Projects are deployed by hand (e.g. `scripts/hpa-demo.sh deploy`).
+- OpenBao has to be unsealed by hand after every docker01 reboot; until then, automatic deploys fail.
 - `ansible-playbook playbooks/docker.yml --check` stops partway on a brand-new VM (the Docker service doesn't exist
   yet during a dry run). Real runs are fine.
 - Ansible uses classic `sudo` (`sudo.ws`) because Ubuntu 26.04's `sudo-rs` isn't yet compatible with it

@@ -84,6 +84,16 @@
         - kubectl
         - crictl
 
+    - name: Publish the cluster CA certificate (public part only) for non-admin clients such as the deploy job
+      ansible.builtin.copy:
+        src: /var/lib/rancher/k3s/server/tls/server-ca.crt
+        dest: /etc/rancher/k3s/server-ca.crt
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+      when: not ansible_check_mode
+
     - name: Wait for the join token to be created
       ansible.builtin.wait_for:
         path: /var/lib/rancher/k3s/server/node-token
