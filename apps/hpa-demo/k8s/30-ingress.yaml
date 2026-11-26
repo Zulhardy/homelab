@@ -1,0 +1,21 @@
+# Load balancing from outside: Traefik (built into k3s) receives traffic on port 80 of both VMs
+# and forwards it to the Service.
+# nip.io is a public DNS name that resolves to the IP inside it (192.168.0.102).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hpa-demo
+  namespace: hpa-demo
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: hpa-demo.192.168.0.102.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hpa-demo
+                port:
+                  name: http
