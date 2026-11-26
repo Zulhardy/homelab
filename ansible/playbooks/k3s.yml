@@ -48,10 +48,10 @@
   vars:
     k3s_role: server
   tasks:
-    - name: Write server config
+    - name: Write server config (no secrets in it, so readable; kubectl reads it and warns otherwise)
       ansible.builtin.copy:
         dest: /etc/rancher/k3s/config.yaml
-        mode: "0600"
+        mode: "0644"
         content: |
           node-ip: "{{ k3s_node_ip }}"
           advertise-address: "{{ k3s_node_ip }}"
