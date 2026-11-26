@@ -1,0 +1,128 @@
+---
+# Installs OpenBao (secrets vault) on docker01.
+# - Listens ONLY on 127.0.0.1:8200 (not reachable from the network), with TLS.
+# - Does NOT initialise or unseal it: that produces the unseal keys and root token,
+#   which only the human handles (see docs/OPENBAO.md).
+- name: Install OpenBao
+  hosts: control
+  become: true
+  vars:
+    openbao_deb: "openbao_{{ openbao_version }}_linux_amd64.deb"
+  tasks:
+    - name: Download OpenBao package (checksum verified)
+      ansible.builtin.get_url:
+        url: "https://github.com/openbao/openbao/releases/download/v{{ openbao_version }}/{{ openbao_deb }}"
+        dest: "/var/cache/{{ openbao_deb }}"
+        checksum: "sha256:{{ openbao_deb_sha256 }}"
+        mode: "0644"
+
+    - name: Install OpenBao package
+      ansible.builtin.apt:
+        deb: "/var/cache/{{ openbao_deb }}"
+        state: present
+
+    - name: Create a TLS certificate valid for 127.0.0.1 and localhost
+      # The package's own certificate has no subject alternative names, so clients can't verify it.
+      ansible.builtin.command:
+        cmd: >-
+          openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 1095
+          -subj "/O=homelab/CN=openbao.localhost"
+          -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          -keyout /opt/openbao/tls/tls.key -out /opt/openbao/tls/tls.crt
+        creates: /opt/openbao/tls/.homelab-san-cert
+      notify: Restart OpenBao
+
+    - name: Mark certificate as replaced
+      ansible.builtin.file:
+        path: /opt/openbao/tls/.homelab-san-cert
+        state: touch
+        owner: openbao
+        group: openbao
+        mode: "0600"
+        modification_time: preserve
+        access_time: preserve
+
+    - name: Restrict TLS files to the openbao user
+      ansible.builtin.file:
+        path: "/opt/openbao/tls/{{ item }}"
+        owner: openbao
+        group: openbao
+        mode: "0600"
+      loop:
+        - tls.key
+        - tls.crt
+
+    - name: Publish the certificate (public part only) so clients can verify the server
+      ansible.builtin.copy:
+        src: /opt/openbao/tls/tls.crt
+        dest: /etc/openbao/tls-ca.crt
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Write OpenBao server config
+      ansible.builtin.copy:
+        dest: /etc/openbao/openbao.hcl
+        owner: openbao
+        group: openbao
+        mode: "0640"
+        content: |
+          # Managed by Ansible (homelab repo)
+          ui = true
+
+          storage "pebbledb" {
+            path = "/opt/openbao/data"
+          }
+
+          # Loopback only: only processes on docker01 (you, the runner) can reach it.
+          listener "tcp" {
+            address       = "127.0.0.1:8200"
+            tls_cert_file = "/opt/openbao/tls/tls.crt"
+            tls_key_file  = "/opt/openbao/tls/tls.key"
+          }
+
+          api_addr = "{{ openbao_addr }}"
+      notify: Restart OpenBao
+
+    - name: Set client defaults for everyone on docker01 (address + certificate, no secrets)
+      ansible.builtin.copy:
+        dest: /etc/profile.d/openbao.sh
+        mode: "0644"
+        content: |
+          export BAO_ADDR="{{ openbao_addr }}"
+          export BAO_CACERT=/etc/openbao/tls-ca.crt
+
+    - name: Enable and start OpenBao
+      ansible.builtin.systemd_service:
+        name: openbao
+        enabled: true
+        state: started
+
+    - name: Read OpenBao status (sealed / initialised)
+      ansible.builtin.command: bao status -format=json
+      environment:
+        BAO_ADDR: "{{ openbao_addr }}"
+        BAO_CACERT: /etc/openbao/tls-ca.crt
+      register: bao_status
+      changed_when: false
+      # Exit code 2 = sealed, which is expected before you initialise and unseal it.
+      failed_when: bao_status.rc not in [0, 2]
+      retries: 5
+      delay: 3
+      until: bao_status.rc in [0, 2]
+      when: not ansible_check_mode
+
+    - name: Show status
+      ansible.builtin.debug:
+        msg: >-
+          OpenBao is {{ 'initialised' if (bao_status.stdout | from_json).initialized else 'NOT initialised yet' }}
+          and {{ 'sealed' if (bao_status.stdout | from_json).sealed else 'unsealed' }}.
+          Next: follow docs/OPENBAO.md.
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Restart OpenBao
+      ansible.builtin.systemd_service:
+        name: openbao
+        state: restarted
