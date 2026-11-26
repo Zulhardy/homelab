@@ -18,9 +18,9 @@ Credentials are created for each run and expire after 10 minutes. See [docs/AUTO
 
 | Machine | Specs | Role |
 |---|---|---|
-| **ops01** (192.168.0.102), was docker01 | Ubuntu 26.04.1, 4 CPU, 8 GB RAM | Operations: **k3s server** (Kubernetes control plane), GitHub Actions self-hosted runner, OpenBao (secrets vault), Ansible. **Runs no app pods** |
-| **prd01** (192.168.0.103), was linux01 | Ubuntu 26.04.1, 4 CPU, 8 GB RAM | **k3s agent, PRD only**: production copy of every app |
-| **dev01** (192.168.0.104), new | Ubuntu 26.04.1, 4 CPU, 8 GB RAM | **k3s agent, DEV only**: development copy of every app |
+| **ops01** (192.168.0.102), was docker01 | Ubuntu 26.04.1, 4 GB RAM, 2+ CPU | Operations: **k3s server** (Kubernetes control plane), GitHub Actions self-hosted runner, OpenBao (secrets vault), Ansible. **Runs no app pods** |
+| **prd01** (192.168.0.103), was linux01 | Ubuntu 26.04.1, 2 GB RAM, 2+ CPU | **k3s agent, PRD only**: production copy of every app |
+| **dev01** (192.168.0.104), new | Ubuntu 26.04.1, 2 GB RAM, 2+ CPU | **k3s agent, DEV only**: development copy of every app |
 
 DEV and PRD are separated by **node and namespace**: each app has `<app>-dev` and `<app>-prd` namespaces, and
 Kubernetes forces their pods onto dev01 and prd01 respectively (details in [docs/K3S.md](docs/K3S.md)).
