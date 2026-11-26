@@ -98,8 +98,13 @@ ansible-playbook playbooks/runner.yml -K
 
 - [ ] Open a test PR → the `lint` check runs on a GitHub-hosted runner (not docker01) and passes.
 - [ ] Try `git push origin main` directly → it is rejected (branch protection).
-- [ ] Emergency stop: `sudo systemctl stop 'actions.runner.*'` on docker01 → runner shows **Offline** in GitHub.
-      Then start it again: `sudo systemctl start 'actions.runner.*'`.
+- [x] Emergency stop (tested 2026-11-26). On docker01:
+      - Stop: `sudo systemctl stop actions.runner.zulhardy-homelab.docker01.service` → runner shows **Offline** in GitHub
+      - Start: `sudo systemctl start actions.runner.zulhardy-homelab.docker01.service` → back to **Idle**
+      - Use the full service name. A pattern like `'actions.runner.*'` works for stop but not for start,
+        because systemd only matches patterns against services that are currently loaded.
+      - `/opt/actions-runner` is readable only by `gha-runner`, so `cd` into it fails for your user.
+        If you need its scripts: `sudo bash -c 'cd /opt/actions-runner && ./svc.sh status'`
 
 ## Security notes
 
