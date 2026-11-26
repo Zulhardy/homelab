@@ -23,31 +23,31 @@ a cloud-hosted web application with a database, deployed to Microsoft Azure.
 
 ```mermaid
 flowchart TB
-    subgraph GH["GitHub (cloud)"]
-        REPO["Repo zulhardy/homelab<br/>ruleset on main, secret scanning"]
-        GHA["GitHub Actions<br/>GitHub-hosted runners: lint, image builds"]
-        GHCR["GitHub Container Registry<br/>ghcr.io/zulhardy/..."]
+    subgraph GH["GitHub - cloud"]
+        REPO["Repo zulhardy/homelab"]
+        GHA["GitHub Actions - hosted runners"]
+        GHCR["GitHub Container Registry"]
     end
-    subgraph HOME["Home network: Hyper-V host"]
-        subgraph D1["docker01 (192.168.0.102)"]
-            ANS["Ansible control node"]
-            RUN["GitHub Actions self-hosted runner<br/>user gha-runner"]
-            K3S["k3s server<br/>control plane, Traefik, metrics-server, CoreDNS"]
-            DK1["Docker"]
-        end
-        subgraph L1["linux01 (192.168.0.103)"]
-            AG["k3s agent<br/>runs project pods"]
-            DK2["Docker"]
-        end
+    subgraph D1["docker01 - 192.168.0.102"]
+        ANS["Ansible control node"]
+        RUN["Self-hosted runner - user gha-runner"]
+        K3S["k3s server - control plane"]
+        DK1["Docker"]
     end
-    REPO --> GHA
-    GHA -->|push image| GHCR
-    RUN -.->|outbound HTTPS only| REPO
-    ANS -->|SSH| L1
-    ANS -->|local| D1
-    K3S <-->|"6443/tcp, 8472/udp, 10250/tcp"| AG
-    AG -->|pull images| GHCR
+    subgraph L1["linux01 - 192.168.0.103"]
+        AG["k3s agent - runs project pods"]
+        DK2["Docker"]
+    end
+    REPO -->|"triggers"| GHA
+    GHA -->|"push image"| GHCR
+    RUN -.->|"outbound HTTPS only"| REPO
+    ANS -->|"SSH"| AG
+    ANS -->|"local"| K3S
+    K3S ---|"6443, 8472, 10250"| AG
+    AG -->|"pull images"| GHCR
 ```
+
+k3s ports between the nodes: 6443/tcp (Kubernetes API), 8472/udp (Flannel VXLAN networking), 10250/tcp (kubelet).
 
 ### Components in detail
 
@@ -111,15 +111,15 @@ CI/CD here is **GitHub Actions**. Every change, whether to the homelab or to a p
 
 ```mermaid
 flowchart LR
-    A[Change on a branch] --> B[Pull request to main]
-    B --> C["CI: pr-checks.yml<br/>lint on a GitHub-hosted runner"]
-    C -->|fails| A
-    C -->|passes| D["Human review<br/>and merge"]
-    D --> E{What changed?}
-    E -->|homelab: ansible/, docs/| F["Human runs the playbook<br/>on docker01"]
-    E -->|project app, e.g. apps/hpa-demo/app| G["Build: hpa-demo-image.yml<br/>GitHub-hosted runner"]
-    G --> H["Publish image to GHCR<br/>ghcr.io/zulhardy/hpa-demo:sha-..."]
-    H --> I["Deploy to k3s<br/>scripts/hpa-demo.sh deploy<br/>(by hand for now)"]
+    A["Change on a branch"] --> B["Pull request to main"]
+    B --> C["CI - pr-checks.yml - lint"]
+    C -->|"fails"| A
+    C -->|"passes"| D["Human review and merge"]
+    D --> E{"What changed?"}
+    E -->|"homelab files"| F["Human runs the playbook on docker01"]
+    E -->|"project app"| G["Build - hpa-demo-image.yml"]
+    G --> H["Publish image to GHCR"]
+    H --> I["Deploy to k3s - by hand for now"]
 ```
 
 | Stage | Type | Where it runs | Triggered by | Gate |
