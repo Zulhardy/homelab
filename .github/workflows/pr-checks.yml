@@ -20,8 +20,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Set up Python (ansible-core 2.22 needs >= 3.13)
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+
       - name: Install pinned lint tools
-        run: pip install --user ansible-core==2.22.0 ansible-lint==26.11.1 yamllint==1.38.0
+        run: pip install ansible-core==2.22.0 ansible-lint==26.11.1 yamllint==1.38.0
 
       - name: Lint
         run: bash scripts/lint.sh
