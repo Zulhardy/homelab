@@ -8,7 +8,16 @@ runner_dir: /opt/actions-runner
 runner_name: ops01
 runner_labels: "homelab,ops01"
 
-runner_repo_url: "https://github.com/zulhardy/homelab"
+# Registered at ORGANIZATION level, so one runner serves every repo in the org (homelab and devops-projects).
+# The org's runner group must allow public repositories (docs/BOOTSTRAP.md, step 6).
+runner_org_url: "https://github.com/zulhardy-lab"
+
+# Allowed apps: the ONLY apps the platform onboards (namespaces <app>-dev / <app>-prd, deployer accounts,
+# OpenBao roles dev-<app> / prd-<app>). Applied by the homelab pipeline (scripts/ci-homelab.sh) after the playbooks,
+# so adding a name here needs the "platform" approval. The apps themselves live in zulhardy-lab/devops-projects,
+# which can only deploy what is listed here. Removing a name does NOT remove the app: that's a manual step.
+# Names: lowercase letters, digits, "-", max 40 characters.
+homelab_apps: []  # e.g. [hpa-demo]; hpa-demo is not listed while its deploys are switched off
 
 # k3s (lightweight Kubernetes), pinned version + checksum.
 # Checksum from the release's sha256sum-amd64.txt, and re-computed from the binary, on 2026-11-26.

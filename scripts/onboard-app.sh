@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# onboard-app.sh APP -> lets the pipeline deploy apps/APP to DEV and PRD:
+# onboard-app.sh APP -> lets the devops-projects pipeline deploy APP to DEV and PRD:
 #   Kubernetes: namespaces APP-dev and APP-prd, each pinned to its environment's nodes (dev01 / prd01) through
 #               the node-selector annotation (enforced by the API server's PodNodeSelector plugin), each with a
 #               ServiceAccount "deployer" + Role (only inside that namespace); the OpenBao broker may mint their tokens
 #   OpenBao:    kubernetes/roles/dev-APP and prd-APP -> 10-minute tokens for the matching deployer
 # Safe to run again (everything is "apply"/"write").
 #
+# Which apps: the allowed-apps list homelab_apps (ansible/inventory/group_vars/all.yml). The app's code lives in
+# zulhardy-lab/devops-projects; nothing of it is needed here.
 # Needs admin access to both: an admin kubeconfig (KUBECONFIG) and an OpenBao token allowed to write
-# kubernetes/roles/* (BAO_TOKEN). Called by the apps pipeline (scripts/ci-apps.sh) and by the bootstrap.
+# kubernetes/roles/* (BAO_TOKEN). Called by the homelab pipeline (scripts/ci-homelab.sh) and by the bootstrap.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 app="${1:?usage: onboard-app.sh APP}"
@@ -17,7 +19,6 @@ if ! [[ "${app}" =~ ^[a-z0-9]([-a-z0-9]{0,38}[a-z0-9])?$ ]]; then  # + "-dev"/"-
   exit 1
 fi
 case "${app}" in default|openbao|kube-*) echo "'${app}' is a reserved namespace name." >&2; exit 1 ;; esac
-[ -d "apps/${app}/k8s" ] || { echo "apps/${app}/k8s not found" >&2; exit 1; }
 
 for env in dev prd; do
   ns="${app}-${env}"

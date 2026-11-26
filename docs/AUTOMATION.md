@@ -2,49 +2,57 @@
 
 **People review and merge pull requests, and approve high-risk steps. Everything else is automatic.**
 
-| Step | Approval? | Why |
+Two repos share the homelab, through one self-hosted runner on ops01 registered at organization level (`zulhardy-lab`):
+
+| Repo | Owns | Can do on the homelab |
 |---|---|---|
-| Lint, unit tests, integration tests, security scans, image build | No | Can't change anything running |
-| Deploy to **DEV** (dev01) | No | DEV is for trying changes |
-| Deploy to **PRD** (prd01) | **Yes**, GitHub environment `prd` | Production |
-| Homelab infrastructure (`ansible/`: VMs, k3s, OpenBao, SSH) | **Yes**, environment `platform` | Can change anything on the VMs |
-| Onboarding a **new** app (namespaces, accounts, vault roles) | **Yes**, environment `platform` | Creates cluster-wide objects with an admin token |
+| **homelab** (this repo) | VMs, k3s, OpenBao, Ansible, the runner, **which apps may run** (`homelab_apps`) | Anything, after the `platform` approval |
+| **[devops-projects](https://github.com/zulhardy-lab/devops-projects)** | The apps (code, manifests, tests), their images | Deploy onboarded apps only: DEV without approval, PRD after the `prd` approval |
+
+| Step | Repo | Approval? | Why |
+|---|---|---|---|
+| Lint and security scan of a PR | both | No | Can't change anything running |
+| App tests, image build and scan | devops-projects | No | Can't change anything running |
+| Deploy to **DEV** (dev01) | devops-projects | No (environment `dev`) | DEV is for trying changes |
+| Deploy to **PRD** (prd01) | devops-projects | **Yes**, environment `prd` | Production |
+| Homelab infrastructure (`ansible/`: VMs, k3s, OpenBao, SSH) | homelab | **Yes**, environment `platform` | Can change anything on the VMs |
+| Onboarding an app (namespaces, accounts, vault roles) | homelab | **Yes**, environment `platform` (same run) | Creates cluster-wide objects with an admin token |
 
 | You merge a change to… | Pipeline | What happens |
 |---|---|---|
-| `ansible/**` | [`homelab.yml`](../.github/workflows/homelab.yml) | Waits for approval, then `base.yml`, `k3s.yml`, `openbao.yml`, `automation-access.yml` on all VMs |
-| `apps/**` | [`apps.yml`](../.github/workflows/apps.yml) | Tests + scans → build, integration test, image scan → publish → (approval if new app) onboard → **DEV** + smoke test → approval → **PRD** + smoke test |
-| Shared pipeline files (`scripts/`, the workflows) | Both, as relevant | All apps re-tested and redeployed (images are reused when the app code didn't change, but re-tested and re-scanned) |
+| `ansible/**` (including `homelab_apps`), `scripts/ci-homelab.sh`, `scripts/onboard-app.sh`, `scripts/lib/**` | [`homelab.yml`](../.github/workflows/homelab.yml) | Waits for approval, then `base.yml`, `k3s.yml`, `openbao.yml`, `automation-access.yml` on all VMs, then onboards every app in `homelab_apps` |
+| Anything else here (docs, other scripts) | none after merge | Only the PR checks |
 
 ## How approvals are enforced
 
 1. **GitHub** won't start a job in environment `prd` or `platform` until a required reviewer approves it.
-2. **OpenBao** checks the job's GitHub OIDC token, which names the environment only once the job has started
-   (after approval). Each login role accepts one environment:
+2. **OpenBao** checks the job's GitHub OIDC token, which names the repo (by ID), the workflow file, the branch, and
+   the environment (only once the job has started, i.e. after approval). Each login role accepts one repo, one
+   workflow file and one environment:
 
 | OpenBao role | Accepts jobs from | Environment | Can get (10 minutes) |
 |---|---|---|---|
-| `apps-check` | `apps.yml` | none | Read which apps are onboarded. Nothing else |
-| `apps-dev` | `apps.yml` | `dev` | Tokens for the DEV deployers (`kubernetes/creds/dev-*`) |
-| `apps-prd` | `apps.yml` | `prd` | Tokens for the PRD deployers (`kubernetes/creds/prd-*`) |
-| `platform` | `homelab.yml`, `apps.yml` | `platform` | SSH certificates for `automation`; cluster-admin tokens; create Kubernetes roles for new apps |
+| `platform` | homelab `homelab.yml` | `platform` | SSH certificates for `automation`; cluster-admin tokens; create Kubernetes roles for the allowed apps |
+| `projects-check` | devops-projects `apps.yml` | none | Read which apps are onboarded. Nothing else |
+| `projects-dev` | devops-projects `apps.yml` | `dev` | Tokens for the DEV deployers (`kubernetes/creds/dev-*`) |
+| `projects-prd` | devops-projects `apps.yml` | `prd` | Tokens for the PRD deployers (`kubernetes/creds/prd-*`) |
 
-All roles also require: this repo (by ID), branch `main`, a push or manual run, audience `openbao-homelab`.
-A DEV job can't get PRD credentials, and nothing gets admin credentials without an approved `platform` job.
+All roles also require: branch `main`, a push or manual run, audience `openbao-homelab`.
+A DEV job can't get PRD credentials, devops-projects can't get admin credentials, and nothing gets admin
+credentials without an approved `platform` job from this repo.
 
 3. The scripts also refuse to continue if the `prd` / `platform` environment has lost its required reviewers
-   (`require_protected_environment` in [`ci-openbao-login.sh`](../scripts/lib/ci-openbao-login.sh)).
+   (`require_protected_environment` in [`ci-openbao-login.sh`](../scripts/lib/ci-openbao-login.sh), and its copy in
+   devops-projects).
 
-## Tests and scans
+## Tests and scans (this repo)
 
 | Check | When | Fails the pipeline when |
 |---|---|---|
 | Lint ([`lint.sh`](../scripts/lint.sh)): yamllint, ansible syntax-check, ansible-lint, shellcheck | Every PR | Any error |
-| Unit tests ([`unit-test.sh`](../scripts/unit-test.sh)) | PR and after merge | A test fails, or the app has **no** unit tests |
-| Integration test ([`integration-test.sh`](../scripts/integration-test.sh)) | PR and after merge, against the built container (read-only, no capabilities) | `apps/<app>/tests/integration.sh` fails |
-| Repo scan ([`security-scan.sh repo`](../scripts/security-scan.sh)) | PR and after merge | Any secret; a HIGH/CRITICAL misconfiguration; a CRITICAL vulnerability that has a fix |
-| Image scan ([`security-scan.sh image`](../scripts/security-scan.sh)) | PR and before every push to GHCR | A CRITICAL vulnerability with a fix, or a secret in the image |
-| Smoke test ([`ci-apps.sh`](../scripts/ci-apps.sh)) | After each DEV and PRD deploy | `integration.sh` fails against the app's real address |
+| Repo scan ([`security-scan.sh repo`](../scripts/security-scan.sh)) | Every PR | Any secret; a HIGH/CRITICAL misconfiguration; a CRITICAL vulnerability that has a fix |
+
+App tests (unit, integration, image scan, smoke tests) run in devops-projects.
 
 Everything HIGH and above is printed in the log even when it doesn't fail the run. To accept a specific finding,
 add its ID to a `.trivyignore` file at the repo root, with a comment saying why, in a pull request.
@@ -54,20 +62,30 @@ open source, and DEV/PRD run on the homelab VMs.
 
 ## One-time setup (manual, once)
 
-### 1. GitHub environments (repo settings: yours to do)
+### 1. GitHub settings (yours to do)
 
-GitHub repo → **Settings → Environments → New environment**, three times:
+**This repo** → **Settings → Environments → New environment**:
+
+| Name | Required reviewers | Deployment branches |
+|---|---|---|
+| `platform` | **yourself** (your GitHub user; leave "Prevent self-review" off if you're the only reviewer), admin bypass off | **Selected branches** → `main` |
+
+**devops-projects** → **Settings → Environments**:
 
 | Name | Required reviewers | Deployment branches |
 |---|---|---|
 | `dev` | none | **Selected branches** → `main` |
-| `prd` | **yourself** (your GitHub user; leave "Prevent self-review" off if you're the only reviewer) | **Selected branches** → `main` |
-| `platform` | **yourself** | **Selected branches** → `main` |
+| `prd` | **yourself**, admin bypass off | **Selected branches** → `main` |
 
-The names must match exactly: OpenBao checks them.
+The names must match exactly: OpenBao checks them. The old `dev` and `prd` environments in this repo are no longer
+used by any workflow here; whether to delete them is up to you.
 
-Then **Settings → Rules → Rulesets → protect-main → Require status checks**: add **`quality`** (it covers lint,
-tests and scans). You can keep `lint` too.
+Then, in each repo, **Settings → Rules → Rulesets → protect-main → Require status checks**: **`lint`** and
+**`quality`**.
+
+**Organization** (`zulhardy-lab`) → **Settings → Actions → Runner groups**: the group holding the ops01 runner must
+**allow public repositories**, with repository access limited to `homelab` and `devops-projects`. See
+[BOOTSTRAP.md, step 6](BOOTSTRAP.md#step-6--install-the-github-actions-runner-on-ops01).
 
 ### 2. Bootstrap
 
@@ -84,13 +102,16 @@ hidden), then:
 | 3 | Creates a **temporary root token** (over the admin socket, from 2 recovery keys) |
 | 4 | `k3s.yml`: joins dev01, pins node names, DEV/PRD node labels, PodNodeSelector, publishes the CA certificate |
 | 5 | Kubernetes: `openbao-broker` and `homelab-platform` (cluster-admin) accounts in namespace `openbao` |
-| 6 | OpenBao: SSH certificate authority, Kubernetes roles, policies and login roles `apps-check`, `apps-dev`, `apps-prd`, `platform` |
+| 6 | OpenBao: SSH certificate authority, Kubernetes roles, policies and login roles `platform`, `projects-check`, `projects-dev`, `projects-prd`; removes the old `apps-*` roles |
 | 7 | `automation-access.yml`: `automation` user on every VM; sshd trusts OpenBao-signed certificates |
-| 8 | Onboards every existing app into DEV and PRD |
-| 9 | Self-tests (below) and a check of the GitHub environments |
+| 8 | Onboards every app in `homelab_apps` into DEV and PRD |
+| 9 | Self-tests (below), a check of both repo IDs and of the GitHub environments |
 | 10 | **Revokes the temporary root token** |
 
-Expected self-test output (names after the rename):
+The repo IDs (`REPO_ID`, `PROJECTS_REPO_ID`) are at the top of the script. A repo's ID survives renames and
+transfers, and a new repo with the same name gets a different one, so OpenBao trusts the repo itself, not its name.
+
+Expected self-test output (with hpa-demo in `homelab_apps`; with an empty list the deployer lines are skipped):
 
 ```
   127.0.0.1        ops01: automation can sudo
@@ -99,62 +120,53 @@ Expected self-test output (names after the rename):
   hpa-demo-dev deployer          deploy:yes  secrets:no  kube-system:no  prd:no
   hpa-demo-prd deployer          deploy:yes  secrets:no  kube-system:no  dev:no
   ...
-  dev       required reviewers: no (expected no)  OK
-  prd       required reviewers: yes (expected yes)  OK
-  platform  required reviewers: yes (expected yes)  OK
+  zulhardy-lab/homelab             id 1473136403 (expected 1473136403)  OK
+  zulhardy-lab/devops-projects     id 1473714389 (expected 1473714389)  OK
+  zulhardy-lab/homelab/platform        required reviewers: yes (expected yes)  OK
+  zulhardy-lab/devops-projects/dev     required reviewers: no (expected no)  OK
+  zulhardy-lab/devops-projects/prd     required reviewers: yes (expected yes)  OK
 ```
 
 It's safe to run again. Afterwards, **back up the auto-unseal key** ([OPENBAO.md](OPENBAO.md#back-up-the-auto-unseal-key)).
 
 ## Adding an app
 
-Create a folder under `apps/`, open a pull request, merge, approve the onboarding once, then approve PRD deploys.
+The app itself goes into **devops-projects** (layout and manifest rules:
+[its README](https://github.com/zulhardy-lab/devops-projects#adding-a-project)). Letting it run on the homelab is a
+platform decision, made here:
 
-```
-apps/<name>/
-  app/Dockerfile          optional: if present, built to ghcr.io/zulhardy/<name>:sha-<commit>; must EXPOSE a port
-  k8s/10-*.yaml           Kubernetes manifests, NUMBERED, applied in order to <name>-dev, then <name>-prd
-  k8s/20-*.yaml
-  k8s/<other>.yaml        not numbered = not deployed automatically (e.g. load-generator.yaml)
-  tests/test_*.py         REQUIRED unit tests (Python unittest), or an executable tests/unit.sh for other languages
-  tests/integration.sh    REQUIRED if there is a Dockerfile or an Ingress: integration.sh BASE_URL [HOST_HEADER]
-  README.md
-  deploy.disabled         optional: if present, the app is tested, scanned and built, but NOT onboarded or deployed
-```
+1. In a pull request here, add the name to `homelab_apps` in
+   [`ansible/inventory/group_vars/all.yml`](../ansible/inventory/group_vars/all.yml), e.g. `homelab_apps: [hpa-demo]`.
+2. Merge, then approve the homelab run (`platform`). After the playbooks it runs
+   [`onboard-app.sh`](../scripts/onboard-app.sh) for every listed app: namespaces `<name>-dev` / `<name>-prd` pinned
+   to dev01 / prd01, a `deployer` account per namespace
+   ([`app-deployer-rbac.yaml.tmpl`](../ansible/files/k8s/app-deployer-rbac.yaml.tmpl)), OpenBao roles
+   `dev-<name>` / `prd-<name>`.
+3. In devops-projects, the next merge (or a manual run of its `apps` workflow) deploys the app to DEV, then PRD
+   after approval. Until step 2 is done, its pipeline warns "not onboarded" and doesn't deploy.
 
 | Rule | Why |
 |---|---|
-| `<name>`: lowercase letters, digits, `-`; max 40 characters; not `default`, `openbao`, `kube-*` | It becomes the namespaces `<name>-dev` / `<name>-prd` |
-| Don't put a Namespace or `namespace:` in the manifests | The pipeline applies them to the right environment's namespace |
-| Use `image: APP_IMAGE` for your own image | Replaced with the exact image built for this commit (same image in DEV and PRD) |
-| Use `host: APP_INGRESS_HOST` in an Ingress | DEV: `<name>.192.168.0.104.nip.io`, PRD: `<name>.192.168.0.103.nip.io` |
-| `APP_ENV` is replaced with `dev` or `prd` | If a manifest needs to differ per environment (e.g. replicas) |
-| No `nodeSelector` / `nodeName` needed | Kubernetes places DEV pods on dev01 and PRD pods on prd01 |
-| Allowed object types: Deployment, StatefulSet, Service, ConfigMap, PersistentVolumeClaim, Ingress, HorizontalPodAutoscaler, Job | That's what the `deployer` accounts may create ([`app-deployer-rbac.yaml.tmpl`](../ansible/files/k8s/app-deployer-rbac.yaml.tmpl)). Need more, e.g. Secrets? Change that template in a PR |
+| `<name>`: lowercase letters, digits, `-`; max 40 characters; not `default`, `openbao`, `kube-*` | It becomes the namespaces `<name>-dev` / `<name>-prd` (checked by `onboard-app.sh`) |
+| Allowed object types: Deployment, StatefulSet, Service, ConfigMap, PersistentVolumeClaim, Ingress, HorizontalPodAutoscaler, Job | That's what the `deployer` accounts may create. Need more, e.g. Secrets? Change the RBAC template in a PR here |
 | No deletes | The deployer can't delete anything. Removing objects or a whole app is a manual step on purpose |
 
-See [`apps/hpa-demo`](../apps/hpa-demo/) for a complete example. Its deploys are currently switched off
-(`apps/hpa-demo/deploy.disabled`).
-
-### Switching deploys off or on
-
-- **Off**: add `apps/<name>/deploy.disabled` (a short note saying why) in a pull request. Tests, scans and the
-  image build still run; onboarding and the DEV/PRD deploys are skipped. Anything already running stays as it is
-  (removing it is a manual step).
-- **On**: delete that file in a pull request. After merging, approve the onboarding once (`platform`); DEV deploys
-  automatically, PRD after approval.
+**Removing an app**: take it out of `homelab_apps`. That only stops future onboarding; the homelab run then warns
+that the app is still onboarded. Deleting its namespaces (`kubectl delete namespace <name>-dev <name>-prd`) and its
+OpenBao roles (`bao delete kubernetes/roles/dev-<name>`, `.../prd-<name>`) is yours to do, by hand.
 
 ## What the pipelines may do (accepted trade-offs)
 
 | Identity | Can do | Only when |
 |---|---|---|
-| `automation` (SSH, all VMs) | Anything, with sudo | Approved `platform` job from `homelab.yml` on `main`, 10-minute certificate |
+| `automation` (SSH, all VMs) | Anything, with sudo | Approved `platform` job from homelab `homelab.yml` on `main`, 10-minute certificate |
 | `homelab-platform` (Kubernetes) | Anything in the cluster (cluster-admin) | Approved `platform` job, 10-minute token; used only for onboarding |
-| `<app>-dev/deployer` | Create/update that app's objects in `<app>-dev` | `dev` job from `apps.yml` on `main`, 10-minute token |
-| `<app>-prd/deployer` | Create/update that app's objects in `<app>-prd` | Approved `prd` job from `apps.yml` on `main`, 10-minute token |
+| `<app>-dev/deployer` | Create/update that app's objects in `<app>-dev` | `dev` job from devops-projects `apps.yml` on `main`, 10-minute token |
+| `<app>-prd/deployer` | Create/update that app's objects in `<app>-prd` | Approved `prd` job from devops-projects `apps.yml` on `main`, 10-minute token |
 
 **An approved homelab run can change anything** on the VMs and in the cluster. The review before merge, and the
-approval, are the controls.
+approval, are the controls. The shared runner means a devops-projects job runs on the same machine as OpenBao; it
+still only gets the credentials its OpenBao role allows.
 
 What stays manual, on purpose: review and merge; approvals; the one-time setup above; `runner.yml`;
 **deleting** apps, namespaces, nodes or data.
@@ -166,15 +178,17 @@ Find the run under the repo's **Actions** tab, open the job, and read the step l
 | Message | Cause | Fix |
 |---|---|---|
 | Job shows **Waiting** | It needs approval (`prd` or `platform`) | Open the run → **Review deployments** → approve |
+| Job stays **Queued** in devops-projects | The org runner group doesn't allow that repo, or public repos | Organization → Settings → Actions → Runner groups (setup step 1) |
 | `has no required reviewers. Refusing to continue` | The `prd` / `platform` environment lost its protection | Re-add the reviewer (setup step 1) |
 | `claim "environment" is missing` / `does not match` | Job ran without (or in the wrong) environment | Expected if the workflow was edited; environments must match the table above |
-| `error validating claims` / `permission denied` at login | Not `homelab.yml`/`apps.yml` on `main` of this repo | Renamed a workflow? Update `WF_PREFIX` in the bootstrap and re-run it |
+| `error validating claims` / `permission denied` at login | Not the expected repo / workflow / `main` | Renamed a workflow or recreated a repo? Update `WF_PREFIX` / the repo IDs in the bootstrap and re-run it |
+| `<app> is not onboarded on the homelab` (devops-projects) | The app isn't in `homelab_apps`, or the homelab run wasn't approved yet | "Adding an app" above |
+| `homelab_apps must be a list of app names` | The list in `group_vars/all.yml` isn't a YAML list | Write it as `[a, b]` or one `- name` per line |
 | `OpenBao is sealed or not running` | OpenBao stopped, or the seal key file is missing | `sudo systemctl status openbao`; see [OPENBAO.md](OPENBAO.md) |
 | `Permission denied (publickey)` in a playbook | `automation` certificate not trusted on that VM | Re-run the bootstrap (step 7) |
-| `forbidden` during deploy | Object type the `deployer` can't create | Change the manifests, or extend the RBAC template in a PR |
+| `forbidden` during a deploy | Object type the `deployer` can't create | Change the manifests, or extend the RBAC template in a PR here |
 | `pods ... is forbidden: pod node label selector conflicts` | A manifest asks for the other environment's node | Remove its `nodeSelector` |
-| `FAIL: ... has no unit tests` / `no executable .../integration.sh` | Required tests missing | Add them (see "Adding an app") |
-| Security scan gate failed | Secret, misconfiguration or fixable CRITICAL vulnerability | Fix it (update the base image digest, fix the manifest). Only if it's a false positive: `.trivyignore` in a PR |
+| Security scan gate failed | Secret, misconfiguration or fixable CRITICAL vulnerability | Fix it. Only if it's a false positive: `.trivyignore` in a PR |
 
 To re-run a failed job: open the run → **Re-run jobs**. To run a pipeline by hand: **Actions** → pick the
 workflow → **Run workflow** (on `main`).

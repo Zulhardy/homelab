@@ -6,18 +6,17 @@
 #   openbao_logout                     -> revokes BAO_TOKEN (call from an EXIT trap)
 #   openbao_k8s_token ROLE NS FILE     -> writes a 10-minute Kubernetes token for ROLE in NS to FILE
 #
-# OpenBao login roles (set up by scripts/bootstrap-automation.sh), all limited to this repo, main, and the
-# homelab.yml / apps.yml workflows:
-#   apps-check : no environment       -> may only READ which apps are onboarded
-#   apps-dev   : environment "dev"    -> DEV deployer tokens only
-#   apps-prd   : environment "prd"    -> PRD deployer tokens only (GitHub requires approval first)
-#   platform   : environment "platform" -> SSH certs for "automation", cluster-admin tokens, onboarding
-#                                        (GitHub requires approval first)
+# OpenBao login roles (set up by scripts/bootstrap-automation.sh), each limited to one repo (by ID), main, and
+# one workflow file:
+#   platform       : this repo, homelab.yml, environment "platform" -> SSH certs for "automation", cluster-admin
+#                    tokens, onboarding of the apps in homelab_apps (GitHub requires approval first)
+#   projects-check / projects-dev / projects-prd : zulhardy-lab/devops-projects, apps.yml (deploys only; that repo
+#                    has its own copy of this file)
 
 export BAO_ADDR="https://127.0.0.1:8200"
 export BAO_CACERT="/etc/openbao/tls-ca.crt"
 OPENBAO_AUDIENCE="openbao-homelab"
-GITHUB_REPO_API="https://api.github.com/repos/Zulhardy/homelab"
+GITHUB_REPO_API="https://api.github.com/repos/zulhardy-lab/homelab"
 
 # Defence in depth: if someone deleted the environment's protection rule (or GitHub auto-created the environment
 # without one), refuse to continue instead of deploying without the approval.

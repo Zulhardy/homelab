@@ -11,27 +11,38 @@
 #  3. root token    : temporary, created over the admin socket from 2 recovery keys; revoked at the end
 #  4. k3s.yml       : joins dev01, pins node names, DEV/PRD node labels + PodNodeSelector, publishes the CA cert
 #  5. Kubernetes    : broker + pipeline admin account (cluster-admin, used only through 10-minute tokens)
-#  6. OpenBao       : SSH certificate authority, Kubernetes roles, policies, GitHub OIDC login roles
-#                     (apps-check, apps-dev, apps-prd, platform: one per pipeline stage)
+#  6. OpenBao       : SSH certificate authority, Kubernetes roles, policies, GitHub OIDC login roles:
+#                     platform (this repo's homelab.yml) and projects-check / projects-dev / projects-prd
+#                     (zulhardy-lab/devops-projects' apps.yml: deploy only)
 #  7. automation    : "automation" user on every VM, sshd trusts OpenBao-signed certificates
-#  8. apps          : onboards every existing apps/*/ into DEV and PRD
+#  8. apps          : onboards every app in homelab_apps (ansible/inventory/group_vars/all.yml) into DEV and PRD
 #  9. self-tests    : SSH as automation with a fresh certificate; DEV/PRD deployer token permissions;
-#                     GitHub environments dev / prd / platform exist with the right approval settings
+#                     GitHub environments exist with the right approval settings (homelab: platform;
+#                     devops-projects: dev, prd)
 # 10. root token revoked
 # Safe to run again.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REPO_ID="1473136403"   # Zulhardy/homelab, from the GitHub API (never changes, even if renamed)
-WF_PREFIX="Zulhardy/homelab/.github/workflows"
+# Repo IDs from the GitHub API (gh api repos/OWNER/REPO --jq .id). They never change, even if a repo is renamed or
+# transferred, and a new repo with the same name gets a different ID. Checked on 2026-11-27.
+REPO="zulhardy-lab/homelab"
+REPO_ID="1473136403"
+PROJECTS_REPO="zulhardy-lab/devops-projects"
+PROJECTS_REPO_ID="1473714389"
+WF_PREFIX="${REPO}/.github/workflows"
+PROJECTS_WF_PREFIX="${PROJECTS_REPO}/.github/workflows"
 SOCK="/run/openbao/admin.sock"
 
 [ "$(id -u)" -ne 0 ] || { echo "Run this as your normal user, not with sudo." >&2; exit 1; }
-for c in bao kubectl ansible-playbook python3 ssh ssh-keygen sudo.ws; do
+for c in bao kubectl ansible-playbook ansible-inventory python3 ssh ssh-keygen sudo.ws; do
   command -v "${c}" >/dev/null || { echo "Missing command: ${c}" >&2; exit 1; }
 done
 # shellcheck source=/dev/null
 [ -n "${BAO_ADDR:-}" ] || source /etc/profile.d/openbao.sh
+# shellcheck source=scripts/lib/homelab-apps.sh
+source scripts/lib/homelab-apps.sh
+apps_list="$(homelab_apps inventory/hosts.ini)"  # fails here, before any change, if the list is broken
 kubectl auth can-i '*' '*' --all-namespaces >/dev/null 2>&1 || { echo "Your kubectl isn't cluster admin (check ~/.kube/config)." >&2; exit 1; }
 
 work="$(mktemp -d)"
@@ -110,23 +121,23 @@ bao write ssh-client-signer/roles/automation - <<'ROLE'
 ROLE
 
 # --- Policies: one per pipeline job type. Each GitHub job only gets what its stage needs.
-bao policy write apps-check - <<'POLICY'
-# apps.yml "onboard-check" job (no approval): may only see which apps are onboarded.
+bao policy write projects-check - <<'POLICY'
+# devops-projects apps.yml "onboarded" job (no approval): may only see which apps are onboarded.
 path "kubernetes/roles/*" { capabilities = ["read"] }
 POLICY
-bao policy write apps-dev - <<'POLICY'
-# apps.yml "deploy-dev" job (GitHub environment "dev", no approval): DEV deployer tokens only.
+bao policy write projects-dev - <<'POLICY'
+# devops-projects apps.yml "deploy-dev" job (GitHub environment "dev", no approval): DEV deployer tokens only.
 path "kubernetes/creds/dev-*" { capabilities = ["update"] }
 POLICY
-bao policy write apps-prd - <<'POLICY'
-# apps.yml "deploy-prd" job (GitHub environment "prd", approval required): PRD deployer tokens only.
+bao policy write projects-prd - <<'POLICY'
+# devops-projects apps.yml "deploy-prd" job (GitHub environment "prd", approval required): PRD deployer tokens only.
 path "kubernetes/creds/prd-*" { capabilities = ["update"] }
 POLICY
 bao policy write platform - <<'POLICY'
-# homelab.yml "apply" and apps.yml "onboard" (GitHub environment "platform", approval required).
+# homelab.yml "apply" (GitHub environment "platform", approval required): playbooks + onboarding homelab_apps.
 path "ssh-client-signer/sign/automation"   { capabilities = ["update"] }                     # 10-minute SSH certs
 path "kubernetes/creds/homelab-platform"   { capabilities = ["update"] }                     # 10-minute cluster-admin
-path "kubernetes/roles/*"                  { capabilities = ["create", "update", "read"] }   # onboard new apps
+path "kubernetes/roles/*"                  { capabilities = ["create", "update", "read"] }   # onboard allowed apps
 POLICY
 
 bao auth list -format=json | grep -q '"jwt-github/"' || bao auth enable -path=jwt-github jwt
@@ -134,12 +145,12 @@ bao write auth/jwt-github/config \
   oidc_discovery_url="https://token.actions.githubusercontent.com" \
   bound_issuer="https://token.actions.githubusercontent.com"
 
-# jwt_role NAME POLICY WORKFLOWS_JSON [ENVIRONMENT]
-# Every role: this repo (by id), main only, push or manual run, named workflow files only, 10-minute session.
+# jwt_role NAME POLICY REPO_ID WORKFLOWS_JSON [ENVIRONMENT]
+# Every role: one repo (by id), main only, push or manual run, named workflow files only, 10-minute session.
 # ENVIRONMENT: the GitHub environment the job must run in. GitHub only puts it in the token after the
 # environment's protection rules (required reviewers) have passed.
 jwt_role() {
-  local name="$1" policy="$2" wfs="$3" env="${4:-}" env_claim=""
+  local name="$1" policy="$2" repo_id="$3" wfs="$4" env="${5:-}" env_claim=""
   [ -n "${env}" ] && env_claim=", \"environment\": \"${env}\""
   bao write "auth/jwt-github/role/${name}" - <<ROLE
 {
@@ -147,7 +158,7 @@ jwt_role() {
   "user_claim": "sub",
   "bound_audiences": ["openbao-homelab"],
   "bound_claims": {
-    "repository_id": "${REPO_ID}",
+    "repository_id": "${repo_id}",
     "ref": "refs/heads/main",
     "event_name": ["push", "workflow_dispatch"],
     "job_workflow_ref": ${wfs}${env_claim}
@@ -158,34 +169,28 @@ jwt_role() {
 }
 ROLE
 }
-apps_wf="[\"${WF_PREFIX}/apps.yml@refs/heads/main\"]"
-both_wf="[\"${WF_PREFIX}/homelab.yml@refs/heads/main\", \"${WF_PREFIX}/apps.yml@refs/heads/main\"]"
-jwt_role apps-check apps-check "${apps_wf}"
-jwt_role apps-dev   apps-dev   "${apps_wf}" dev
-jwt_role apps-prd   apps-prd   "${apps_wf}" prd
-jwt_role platform   platform   "${both_wf}" platform
+homelab_wf="[\"${WF_PREFIX}/homelab.yml@refs/heads/main\"]"
+projects_wf="[\"${PROJECTS_WF_PREFIX}/apps.yml@refs/heads/main\"]"
+jwt_role platform       platform       "${REPO_ID}"          "${homelab_wf}"  platform
+jwt_role projects-check projects-check "${PROJECTS_REPO_ID}" "${projects_wf}"
+jwt_role projects-dev   projects-dev   "${PROJECTS_REPO_ID}" "${projects_wf}" dev
+jwt_role projects-prd   projects-prd   "${PROJECTS_REPO_ID}" "${projects_wf}" prd
 
-# Older setups (replaced by the roles above). Deleting OpenBao roles/policies only removes access.
-for old in homelab-platform hpa-demo-deploy; do
+# Older setups (replaced by the roles above). Deleting OpenBao login roles/policies only removes access.
+# apps-*: the homelab repo's own apps pipeline, before the apps moved to devops-projects.
+for old in homelab-platform hpa-demo-deploy apps-check apps-dev apps-prd; do
   bao delete "auth/jwt-github/role/${old}" >/dev/null 2>&1 || true
+  bao policy delete "${old}" >/dev/null 2>&1 || true
 done
-bao policy delete homelab-platform >/dev/null 2>&1 || true
-bao policy delete hpa-demo-deploy >/dev/null 2>&1 || true
 bao delete kubernetes/roles/hpa-demo-deployer >/dev/null 2>&1 || true
 
 echo "== 7. automation user + SSH certificate trust on every VM"
 ap automation-access.yml
 
-# Apps to onboard / test: every apps/*/k8s, minus those with deploying switched off (apps/<app>/deploy.disabled).
-deploy_apps=()
-for d in apps/*/k8s; do
-  [ -d "${d}" ] || continue
-  a="$(basename "$(dirname "${d}")")"
-  if [ -f "apps/${a}/deploy.disabled" ]; then echo "  ${a}: deploying switched off (apps/${a}/deploy.disabled), not onboarded"; continue; fi
-  deploy_apps+=("${a}")
-done
+# Apps to onboard / test: the allowed-apps list homelab_apps (read above).
+mapfile -t deploy_apps < <(printf '%s\n' "${apps_list}" | sed '/^$/d')
 
-echo "== 8. Onboard existing apps"
+echo "== 8. Onboard allowed apps (homelab_apps)"
 for a in "${deploy_apps[@]}"; do scripts/onboard-app.sh "${a}"; done
 [ "${#deploy_apps[@]}" -gt 0 ] || echo "  No apps to onboard."
 
@@ -220,20 +225,33 @@ kubectl get namespaces -l homelab.zulhardy/app \
 old_nodes="$(kubectl get nodes -o name | sed 's|node/||' | grep -vxE 'ops01|prd01|dev01' || true)"
 [ -z "${old_nodes}" ] || echo "  Old node entries to remove yourself (docs/K3S.md, 'Renaming nodes'): ${old_nodes//$'\n'/ }"
 
-echo "== GitHub environments (approval gates)"
-for env in dev prd platform; do
-  python3 -I - "https://api.github.com/repos/Zulhardy/homelab/environments/${env}" "${env}" <<'PY' || true
+echo "== GitHub repos and environments (approval gates)"
+for pair in "${REPO}:${REPO_ID}" "${PROJECTS_REPO}:${PROJECTS_REPO_ID}"; do
+  python3 -I - "https://api.github.com/repos/${pair%%:*}" "${pair##*:}" <<'PY' || true
+import json, sys, urllib.request
+url, want = sys.argv[1], sys.argv[2]
+try:
+    with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"}), timeout=30) as r:
+        got = str(json.load(r).get("id"))
+except Exception as e:
+    print(f"  {url}: could not read ({e})"); sys.exit(0)
+print(f"  {url.rsplit('/repos/', 1)[1]:32} id {got} (expected {want})  {'OK' if got == want else 'CHECK: update the repo IDs at the top of this script'}")
+PY
+done
+for check in "${REPO}:platform" "${PROJECTS_REPO}:dev" "${PROJECTS_REPO}:prd"; do
+  repo="${check%%:*}"; env="${check##*:}"
+  python3 -I - "https://api.github.com/repos/${repo}/environments/${env}" "${repo}/${env}" <<'PY' || true
 import json, sys, urllib.request
 url, env = sys.argv[1], sys.argv[2]
 try:
     with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/vnd.github+json"}), timeout=30) as r:
         rules = [x.get("type") for x in json.load(r).get("protection_rules", [])]
 except Exception as e:
-    print(f"  {env:9} MISSING ({e}). Create it: see docs/AUTOMATION.md"); sys.exit(0)
+    print(f"  {env:36} MISSING ({e}). Create it: see docs/AUTOMATION.md"); sys.exit(0)
 gated = "required_reviewers" in rules
-want = env != "dev"
+want = not env.endswith("/dev")
 status = "OK" if gated == want else "CHECK"
-print(f"  {env:9} required reviewers: {'yes' if gated else 'no'} (expected {'yes' if want else 'no'})  {status}")
+print(f"  {env:36} required reviewers: {'yes' if gated else 'no'} (expected {'yes' if want else 'no'})  {status}")
 PY
 done
 

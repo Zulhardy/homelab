@@ -1,6 +1,6 @@
 # Homelab Bootstrap (one-time, done by you)
 
-> These are the first-time steps for a brand-new homelab: GitHub settings, SSH and the runner.
+> These are the first-time steps for a brand-new homelab: GitHub organization and repo settings, SSH and the runner.
 > After them, run the automation bootstrap in [AUTOMATION.md](AUTOMATION.md). From then on, merging a pull request
 > is the only manual step.
 
@@ -27,13 +27,17 @@ Minimums and why: k3s needs 2 GB for a server and 512 MB for an agent, plus the 
       bootstrap to one password prompt.
 - Docker is **not** needed on the VMs (images are built on GitHub's runners; k3s has its own runtime).
 
-## Step 1 — GitHub repository
+## Step 1 — GitHub organization and repositories
 
-1. Create a **public** repository.
+The author's setup: a free GitHub organization (`zulhardy-lab`) holding two public repos, this one (the platform)
+and `devops-projects` (the apps). One self-hosted runner, registered at organization level, serves both.
+The steps below are for this repo; devops-projects needs the same protections (see its README, "Owner setup").
+
+1. Create a **public** repository in your organization.
 2. Push the files from this skeleton to `main` (first commit only; everything after goes through PRs).
 3. Protect `main` (Settings → Branches → Add rule, or Settings → Rules → Rulesets):
    - Require a pull request before merging
-   - Require status checks to pass → `quality` (it includes lint, tests and scans)
+   - Require status checks to pass → `lint` and `quality`
    - Block force pushes and deletion
 4. Settings → Actions → General → "Approval for running fork pull request workflows from contributors":
    choose the strictest option (require approval for **all** outside collaborators).
@@ -80,7 +84,7 @@ git clone https://github.com/<your-github-user>/<your-repo>.git ~/homelab
 Edit on ops01 (and later commit through a PR):
 
 - `ansible/inventory/hosts.ini` → already filled in (ops01 / prd01 / dev01)
-- `ansible/inventory/group_vars/all.yml` → your repo URL and admin user (see "Using this repo for your own homelab" below)
+- `ansible/inventory/group_vars/all.yml` → your organization URL and admin user (see "Using this repo for your own homelab" below)
 
 ## Step 5 — Check Ansible reaches every VM
 
@@ -94,10 +98,18 @@ ansible-playbook playbooks/base.yml -K --check --diff   # dry run: shows the hos
 
 ## Step 6 — Install the GitHub Actions runner on ops01
 
-1. GitHub repo → Settings → Actions → Runners → **New self-hosted runner** → Linux.
+The runner is registered at **organization** level (`runner_org_url` in `group_vars/all.yml`), so both repos can use
+it. Only workflows that run after a merge to `main` target it (label `homelab`).
+
+1. **Runner group first.** GitHub organization → Settings → Actions → **Runner groups** → the `Default` group (or a
+   new one):
+   - **Repository access**: *Selected repositories* → `homelab` and `devops-projects`.
+   - Tick **Allow public repositories**. GitHub turns this off by default because anyone can open a PR on a public
+     repo; here PR workflows never use the self-hosted runner, and fork PR workflows need approval in each repo.
+2. GitHub organization → Settings → Actions → Runners → **New runner** → **New self-hosted runner** → Linux.
    Copy only the **token** from the `./config.sh ... --token XXXX` line. It is short-lived, so run the next
    command right away.
-2. Run:
+3. Run:
 
 ```bash
 cd ~/homelab/ansible
@@ -105,15 +117,33 @@ ansible-playbook playbooks/runner.yml -K
 # paste the token when prompted (input is hidden, and the task is marked no_log)
 ```
 
-3. GitHub repo → Settings → Actions → Runners should show `ops01` as **Idle**, with the label `homelab`.
+4. Organization → Settings → Actions → Runners should show `ops01` as **Idle**, with the labels `homelab`, `ops01`,
+   in the runner group from step 1.
+
+### Moving an existing repo-level runner to the organization
+
+`runner.yml` skips registration while `/opt/actions-runner/.runner` exists, so a runner that is still registered
+to a single repo has to be unregistered first. On ops01 (all yours: it needs a removal token):
+
+1. GitHub (the repo the runner is registered to) → Settings → Actions → Runners → `ops01` → **Remove** → copy the
+   removal token shown for Linux.
+2. Stop and unregister it:
+
+```bash
+sudo bash -c 'cd /opt/actions-runner && ./svc.sh stop && ./svc.sh uninstall'
+sudo -u gha-runner bash -c 'cd /opt/actions-runner && ./config.sh remove --token <removal-token>'
+```
+
+3. Then do steps 1 to 4 above. While the runner is away, post-merge jobs of both repos wait in the queue.
 
 ## Step 7 — Test the safety controls
 
 - [ ] Open a test PR → the checks run on GitHub-hosted runners (not ops01) and `quality` passes.
 - [ ] Try `git push origin main` directly → it is rejected (branch protection).
 - [x] Emergency stop (tested 2026-11-26, as docker01). On ops01:
-      - Stop: `sudo systemctl stop actions.runner.<owner>-<repo>.<runner name>.service` → runner shows **Offline** in GitHub
-      - Start: `sudo systemctl start actions.runner.<owner>-<repo>.<runner name>.service` → back to **Idle**
+      - Stop: `sudo systemctl stop actions.runner.<owner>.<runner name>.service` → runner shows **Offline** in GitHub
+        (`<owner>` is the organization for an org-level runner; it was `<owner>-<repo>` for the old repo-level one)
+      - Start: `sudo systemctl start actions.runner.<owner>.<runner name>.service` → back to **Idle**
       - `<runner name>` is `docker01` if the runner was registered before the rename, `ops01` if after
         (`systemctl list-units 'actions.runner.*'` shows it).
       - Use the full service name. A pattern like `'actions.runner.*'` works for stop but not for start,
@@ -124,8 +154,8 @@ ansible-playbook playbooks/runner.yml -K
 ## Security notes
 
 - The runner user `gha-runner` is **not** in the `docker` group (that would be effectively root on ops01), and Docker
-  isn't installed on the VMs. Because the repo is public, the runner is only used by workflows that run after you
-  merge to `main`.
+  isn't installed on the VMs. Because the repos are public, the runner is only used by workflows that run after you
+  merge to `main`, and its runner group only lets the two repos use it.
 - The inventory contains private LAN addresses (192.168.0.x) and your username. These are not secrets, but they are public.
 - Your admin SSH key on ops01 can reach prd01 and dev01. The pipeline uses its own `automation` user with 10-minute
   certificates instead ([AUTOMATION.md](AUTOMATION.md)).
@@ -133,18 +163,17 @@ ansible-playbook playbooks/runner.yml -K
 ## Using this repo for your own homelab
 
 The commands above use placeholders: `<your-user>` is **your own** Linux admin account on the VMs (the same on all
-three), `<your-github-user>/<your-repo>` is your fork or copy. The code itself contains the author's values. Change
+three), `<your-github-user>/<your-repo>` is your fork or copy, `<your-org>` your GitHub organization. The code itself contains the author's values. Change
 them in a pull request before running anything:
 
 | File | Value to change |
 |---|---|
 | `ansible/inventory/hosts.ini` | `ansible_user=` on prd01 and dev01 → `<your-user>`; IP addresses if yours differ |
 | `ansible/inventory/automation.ini` | IP addresses if yours differ (the `automation` user stays) |
-| `ansible/inventory/group_vars/all.yml` | `runner_repo_url` → your repo; `k3s_admin_user` → `<your-user>` |
-| `scripts/bootstrap-automation.sh` | `REPO_ID` (your repo's numeric ID: `gh api repos/<owner>/<repo> --jq .id`), `WF_PREFIX`, and the repo name in the GitHub environments check |
+| `ansible/inventory/group_vars/all.yml` | `runner_org_url` → `https://github.com/<your-org>`; `k3s_admin_user` → `<your-user>`; `homelab_apps` → your apps |
+| `scripts/bootstrap-automation.sh` | `REPO`, `REPO_ID`, `PROJECTS_REPO`, `PROJECTS_REPO_ID` (numeric IDs: `gh api repos/<owner>/<repo> --jq .id`) |
 | `scripts/lib/ci-openbao-login.sh` | `GITHUB_REPO_API` → your repo |
-| `scripts/image-tag.sh`, `scripts/build-image.sh`, `apps/*/app/Dockerfile` | `ghcr.io/zulhardy` and the image source label → your GitHub user and repo |
-| `scripts/lib/envs.sh`, `scripts/deploy.sh` comments | DEV / PRD node IP addresses if yours differ |
+| `scripts/bootstrap-automation.sh` self-tests | DEV / PRD node IP addresses if yours differ |
 
-GitHub environments and the `protect-main` ruleset are repo settings; create them in your repo
+GitHub environments and the `protect-main` ruleset are repo settings; create them in your repos
 ([AUTOMATION.md](AUTOMATION.md#one-time-setup-manual-once)) with **yourself** as the required reviewer.
