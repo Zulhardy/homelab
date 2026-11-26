@@ -91,8 +91,9 @@ bao write auth/jwt-github/role/hpa-demo-deploy - <<ROLE
 }
 ROLE
 
+# Kubernetes refuses service-account tokens shorter than 10 minutes.
 echo "== Self-test: mint a deployer token and check what it can do"
-bao write -format=json kubernetes/creds/hpa-demo-deployer kubernetes_namespace=hpa-demo ttl=5m > "${workdir}/creds.json"
+bao write -format=json kubernetes/creds/hpa-demo-deployer kubernetes_namespace=hpa-demo ttl=10m > "${workdir}/creds.json"
 python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["service_account_token"])' "${workdir}/creds.json" > "${workdir}/deployer.jwt"
 # Use an empty kubeconfig so ONLY the deployer token is presented (your admin certificate would otherwise win).
 : > "${workdir}/empty-kubeconfig"
