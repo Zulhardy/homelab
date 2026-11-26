@@ -97,7 +97,7 @@ scripts/openbao-setup.sh
 ```
 
 It asks for the **root token** (input hidden; paste it from your password manager). At the end it runs a
-self-test with a real 5-minute deployer token. Expected:
+self-test with a real 10-minute deployer token (Kubernetes refuses tokens shorter than 10 minutes). Expected:
 
 ```
   can patch deployments in hpa-demo:               yes
