@@ -23,5 +23,11 @@ runner_dir: /opt/actions-runner
 runner_name: docker01
 runner_labels: "homelab,docker01"
 
-# Replace with your private repo, e.g. https://github.com/<owner>/<repo>
 runner_repo_url: "https://github.com/zulhardy/homelab"
+
+# k3s (lightweight Kubernetes), pinned version + checksum.
+# Checksum from the release's sha256sum-amd64.txt, and re-computed from the binary, on 2026-11-26.
+k3s_version: "v1.37.2+k3s1"
+k3s_sha256: "265b3ee6a3198ef14033c63ef46cbb32370d83795199fb6d1b01f21575eddbda"
+k3s_server_ip: "192.168.0.102"
+k3s_admin_user: zulhardy # gets a kubeconfig on docker01 (cluster admin)

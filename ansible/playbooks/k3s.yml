@@ -1,0 +1,198 @@
+---
+# Installs a 2-node k3s cluster: docker01 = server (control plane), linux01 = agent (workloads).
+# Downloads the pinned k3s binary straight from the GitHub release and verifies its checksum.
+# Does NOT use the get.k3s.io install script (unpinned remote script).
+
+- name: Prepare all k3s nodes
+  hosts: k3s_cluster
+  become: true
+  tasks:
+    - name: Check UFW status
+      ansible.builtin.command: ufw status
+      register: ufw_status
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Stop if UFW is active (k3s ports would be blocked; open them on purpose first)
+      ansible.builtin.assert:
+        that:
+          - "'Status: active' not in ufw_status.stdout"
+        fail_msg: >-
+          UFW is active on {{ inventory_hostname }}. k3s needs TCP 6443, UDP 8472 and TCP 10250 between the VMs.
+          Stopping so nothing is opened without you deciding it.
+
+    - name: Check the vxlan kernel module is available (needed by k3s networking)
+      ansible.builtin.command: modprobe --dry-run vxlan
+      changed_when: false
+      check_mode: false
+
+    - name: Download k3s binary (checksum verified)
+      ansible.builtin.get_url:
+        url: "https://github.com/k3s-io/k3s/releases/download/{{ k3s_version | urlencode }}/k3s"
+        dest: /usr/local/bin/k3s
+        checksum: "sha256:{{ k3s_sha256 }}"
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Create k3s config directory
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: "0755"
+
+- name: Install k3s server (control plane)
+  hosts: k3s_server
+  become: true
+  vars:
+    k3s_role: server
+  tasks:
+    - name: Write server config
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/config.yaml
+        mode: "0600"
+        content: |
+          node-ip: "{{ k3s_node_ip }}"
+          advertise-address: "{{ k3s_node_ip }}"
+          tls-san:
+            - "{{ k3s_node_ip }}"
+            - "{{ inventory_hostname }}"
+          write-kubeconfig-mode: "0600"
+      notify: Restart k3s
+
+    - name: Install k3s server systemd unit
+      ansible.builtin.template:
+        src: k3s.service.j2
+        dest: /etc/systemd/system/k3s.service
+        mode: "0644"
+      notify: Restart k3s
+
+    - name: Enable and start k3s server
+      ansible.builtin.systemd_service:
+        name: k3s
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Create kubectl and crictl links to the k3s binary
+      ansible.builtin.file:
+        src: /usr/local/bin/k3s
+        dest: "/usr/local/bin/{{ item }}"
+        state: link
+      loop:
+        - kubectl
+        - crictl
+
+    - name: Wait for the join token to be created
+      ansible.builtin.wait_for:
+        path: /var/lib/rancher/k3s/server/node-token
+        timeout: 120
+      when: not ansible_check_mode
+
+    - name: Read join token
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token_raw
+      no_log: true
+      when: not ansible_check_mode
+
+    - name: Keep join token in memory for the agent play (never written to the repo)
+      ansible.builtin.set_fact:
+        k3s_join_token: "{{ k3s_token_raw.content | b64decode | trim }}"
+      no_log: true
+      when: not ansible_check_mode
+
+    - name: Create .kube directory for the admin user
+      ansible.builtin.file:
+        path: "/home/{{ k3s_admin_user }}/.kube"
+        state: directory
+        owner: "{{ k3s_admin_user }}"
+        group: "{{ k3s_admin_user }}"
+        mode: "0700"
+
+    - name: Give the admin user a kubeconfig (cluster admin, readable only by that user)
+      ansible.builtin.copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "/home/{{ k3s_admin_user }}/.kube/config"
+        remote_src: true
+        owner: "{{ k3s_admin_user }}"
+        group: "{{ k3s_admin_user }}"
+        mode: "0600"
+      when: not ansible_check_mode
+
+    - name: Point kubectl at that kubeconfig for the admin user
+      # [Unverified] k3s's built-in kubectl may otherwise default to /etc/rancher/k3s/k3s.yaml (root-only).
+      ansible.builtin.lineinfile:
+        path: "/home/{{ k3s_admin_user }}/.bashrc"
+        line: "export KUBECONFIG=$HOME/.kube/config"
+        create: true
+        owner: "{{ k3s_admin_user }}"
+        group: "{{ k3s_admin_user }}"
+        mode: "0644"
+
+  handlers:
+    - name: Restart k3s
+      ansible.builtin.systemd_service:
+        name: k3s
+        state: restarted
+        daemon_reload: true
+
+- name: Install k3s agent (workloads)
+  hosts: k3s_agent
+  become: true
+  vars:
+    k3s_role: agent
+  tasks:
+    - name: Write agent config (contains the join token, root-only)
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/config.yaml
+        mode: "0600"
+        content: |
+          server: "https://{{ k3s_server_ip }}:6443"
+          token: "{{ hostvars[groups['k3s_server'][0]]['k3s_join_token'] }}"
+          node-ip: "{{ k3s_node_ip }}"
+      no_log: true
+      when: not ansible_check_mode
+      notify: Restart k3s-agent
+
+    - name: Install k3s agent systemd unit
+      ansible.builtin.template:
+        src: k3s.service.j2
+        dest: /etc/systemd/system/k3s-agent.service
+        mode: "0644"
+      notify: Restart k3s-agent
+
+    - name: Enable and start k3s agent
+      ansible.builtin.systemd_service:
+        name: k3s-agent
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart k3s-agent
+      ansible.builtin.systemd_service:
+        name: k3s-agent
+        state: restarted
+        daemon_reload: true
+
+- name: Check the cluster
+  hosts: k3s_server
+  become: true
+  tasks:
+    - name: Wait until both nodes are Ready
+      ansible.builtin.command: kubectl get nodes --no-headers
+      register: k3s_nodes
+      until: >-
+        (k3s_nodes.stdout_lines | length) == (groups['k3s_cluster'] | length)
+        and (k3s_nodes.stdout_lines | select('search', ' Ready ') | list | length) == (groups['k3s_cluster'] | length)
+      retries: 30
+      delay: 10
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Show nodes
+      ansible.builtin.debug:
+        var: k3s_nodes.stdout_lines
+      when: not ansible_check_mode
