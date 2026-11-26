@@ -2,8 +2,8 @@
 
 | Node | Role | IP | Environment label |
 |---|---|---|---|
-| ops01 (was docker01) | k3s **server** (control plane). No app pods | 192.168.0.102 | none |
-| prd01 (was linux01) | k3s **agent**: PRD apps | 192.168.0.103 | `node-restriction.kubernetes.io/env=prd` |
+| ops01 | k3s **server** (control plane). No app pods | 192.168.0.102 | none |
+| prd01 | k3s **agent**: PRD apps | 192.168.0.103 | `node-restriction.kubernetes.io/env=prd` |
 | dev01 | k3s **agent**: DEV apps | 192.168.0.104 | `node-restriction.kubernetes.io/env=dev` |
 
 Version: `v1.37.2+k3s1`, downloaded from the GitHub release and checked against a pinned SHA-256.
@@ -53,15 +53,15 @@ kubectl top nodes
 
 ## Renaming nodes
 
-k3s knows a node by its name. When a node is renamed (e.g. docker01 → ops01, linux01 → prd01), it joins as a
+k3s knows a node by its name. When a node is renamed (its name in the inventory changes), it joins as a
 **new** node and the old entry stays behind as `NotReady`. The pods on the old entry are only moved once it is
 removed. Removing it is up to you (deletions are always done by you, not the pipeline):
 
 ```bash
 kubectl get nodes                           # old names show NotReady
-kubectl delete node docker01 linux01        # only the OLD names; never ops01, prd01 or dev01
+kubectl delete node <old-name>              # only the OLD name(s); never ops01, prd01 or dev01
 kubectl -n kube-system get secrets | grep node-password   # old <name>.node-password.k3s entries
-kubectl -n kube-system delete secret docker01.node-password.k3s linux01.node-password.k3s
+kubectl -n kube-system delete secret <old-name>.node-password.k3s
 ```
 
 ## Services
