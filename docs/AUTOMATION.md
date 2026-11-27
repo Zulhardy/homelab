@@ -139,8 +139,8 @@ platform decision, made here:
    [`ansible/inventory/group_vars/all.yml`](../ansible/inventory/group_vars/all.yml), e.g. `homelab_apps: [hpa-demo]`.
 2. Merge, then approve the homelab run (`platform`). After the playbooks it runs
    [`onboard-app.sh`](../scripts/onboard-app.sh) for every listed app: namespaces `<name>-dev` / `<name>-prd` pinned
-   to dev01 / prd01, a `deployer` account per namespace
-   ([`app-deployer-rbac.yaml.tmpl`](../ansible/files/k8s/app-deployer-rbac.yaml.tmpl)), OpenBao roles
+   to dev01 / prd01, a `deployer` account per namespace and a read-only `app-reader` account for the app's own
+   pods ([`app-deployer-rbac.yaml.tmpl`](../ansible/files/k8s/app-deployer-rbac.yaml.tmpl)), OpenBao roles
    `dev-<name>` / `prd-<name>`.
 3. In devops-projects, the next merge (or a manual run of its `apps` workflow) deploys the app to DEV, then PRD
    after approval. Until step 2 is done, its pipeline warns "not onboarded" and doesn't deploy.
@@ -150,6 +150,7 @@ platform decision, made here:
 | `<name>`: lowercase letters, digits, `-`; max 40 characters; not `default`, `openbao`, `kube-*` | It becomes the namespaces `<name>-dev` / `<name>-prd` (checked by `onboard-app.sh`) |
 | Allowed object types: Deployment, StatefulSet, Service, ConfigMap, PersistentVolumeClaim, Ingress, HorizontalPodAutoscaler, Job | That's what the `deployer` accounts may create. Need more, e.g. Secrets? Change the RBAC template in a PR here |
 | No deletes | The deployer can't delete anything. Removing objects or a whole app is a manual step on purpose |
+| App pods can only read, and only if they ask | A pod that sets `serviceAccountName: app-reader` may read its own namespace's pods, autoscalers and pod CPU/memory (e.g. hpa-demo's dashboard). No Secrets, no writes, nothing outside the namespace. Other pods get the default account: no permissions |
 
 **Removing an app**: take it out of `homelab_apps`. That only stops future onboarding; the homelab run then warns
 that the app is still onboarded. Deleting its namespaces (`kubectl delete namespace <name>-dev <name>-prd`) and its
@@ -163,6 +164,7 @@ OpenBao roles (`bao delete kubernetes/roles/dev-<name>`, `.../prd-<name>`) is yo
 | `homelab-platform` (Kubernetes) | Anything in the cluster (cluster-admin) | Approved `platform` job, 10-minute token; used only for onboarding |
 | `<app>-dev/deployer` | Create/update that app's objects in `<app>-dev` | `dev` job from devops-projects `apps.yml` on `main`, 10-minute token |
 | `<app>-prd/deployer` | Create/update that app's objects in `<app>-prd` | Approved `prd` job from devops-projects `apps.yml` on `main`, 10-minute token |
+| `<app>-<env>/app-reader` | Read pods, autoscalers and pod metrics in its own namespace | Pods of that app that name it (`serviceAccountName: app-reader`) |
 
 **An approved homelab run can change anything** on the VMs and in the cluster. The review before merge, and the
 approval, are the controls. The shared runner means a devops-projects job runs on the same machine as OpenBao; it
