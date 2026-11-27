@@ -43,7 +43,7 @@ Two repositories share the homelab. Both use **one runner on ops01**, registered
 
 | You merge a change to… | Pipeline | What happens |
 |---|---|---|
-| `ansible/**` (including `homelab_apps`), `scripts/ci-homelab.sh`, `scripts/onboard-app.sh`, `scripts/lib/**` | [`homelab.yml`](../.github/workflows/homelab.yml) | 1. Waits for the `platform` approval. 2. Runs `base.yml`, `k3s.yml`, `openbao.yml` and `automation-access.yml` on all VMs. 3. Onboards every app in `homelab_apps` |
+| `ansible/**` (including `homelab_apps`), `scripts/ci-homelab.sh`, `scripts/onboard-app.sh`, `scripts/lib/**`, or the workflow file itself | [`homelab.yml`](../.github/workflows/homelab.yml) | 1. Waits for the `platform` approval. 2. Runs `base.yml`, `k3s.yml`, `openbao.yml` and `automation-access.yml` on all VMs. 3. Onboards every app in `homelab_apps` |
 | Anything else here (docs, other scripts) | None after the merge | Only the PR checks ran |
 
 ✅ To watch it: 🌐 the repo's **Actions** tab → **homelab** → the newest run. A run that's **Waiting** needs your
