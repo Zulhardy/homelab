@@ -33,6 +33,43 @@
         name: "{{ inventory_hostname }}"
         use: systemd
 
+    # Leftover from when Docker was used on the VMs: a Docker apt source whose signing key is gone makes
+    # every `apt update` fail (NO_PUBKEY). Only touched when Docker isn't installed, and moved aside, not deleted.
+    - name: Check whether Docker (docker-ce) is installed
+      ansible.builtin.command: dpkg-query -W -f='${Status}' docker-ce
+      register: base_docker_pkg
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Find leftover Docker apt sources
+      ansible.builtin.stat:
+        path: "/etc/apt/sources.list.d/{{ item }}"
+      loop: [docker.sources, docker.list]
+      register: base_docker_sources
+
+    - name: Make a folder for disabled apt sources
+      ansible.builtin.file:
+        path: /root/apt-disabled
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+      when:
+        - "'install ok installed' not in base_docker_pkg.stdout"
+        - base_docker_sources.results | selectattr('stat.exists') | list | length > 0
+
+    - name: Move leftover Docker apt sources to /root/apt-disabled
+      ansible.builtin.command:
+        cmd: "mv /etc/apt/sources.list.d/{{ item.item }} /root/apt-disabled/{{ item.item }}"
+        removes: "/etc/apt/sources.list.d/{{ item.item }}"
+      loop: "{{ base_docker_sources.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - "'install ok installed' not in base_docker_pkg.stdout"
+        - item.stat.exists
+
 - name: Runner user has no root-equivalent groups
   hosts: control
   become: true
