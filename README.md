@@ -1,60 +1,94 @@
 # homelab
-This is a repo for my Devops Homelab
 
-A free workspace on three Ubuntu VMs (Hyper-V) used to build and test a group capstone project:
-a cloud-hosted web application with a database, deployed to Microsoft Azure.
+A DevOps homelab: three Ubuntu virtual machines (VMs) at home, set up as a small but realistic platform for building,
+testing and deploying apps, the way a company would. It's used to author and test a group capstone project (a web
+app with a database, hosted on Microsoft Azure), and to learn and show DevOps skills along the way.
 
-**Reviewing and merging pull requests, and approving high-risk steps** (production deploys and infrastructure
-changes), **are done manually.** Everything else is automatic: tests, security scans, image builds, and the DEV deploy.
-Credentials are created for each run and expire after 10 minutes. See [docs/AUTOMATION.md](docs/AUTOMATION.md).
+This page explains **what's in the homelab and how it works**, in plain language. Every term is explained the first
+time it appears, and there's a word list below. To **build** one yourself, start with
+[docs/BOOTSTRAP.md](docs/BOOTSTRAP.md), a step-by-step guide.
 
-- **This repo** sets up the workspace itself: VMs, Kubernetes (k3s), Ansible, CI/CD, the secrets vault, and which
-  apps may run on it (onboarding). It stays at home.
-- **Mini projects** (e.g. hpa-demo) live in [zulhardy-lab/devops-projects](https://github.com/zulhardy-lab/devops-projects).
-  That repo builds, tests and deploys them, but can only deploy apps this repo has onboarded.
-- **The capstone project** (website, database, pipelines) lives in its own repository (name not decided yet).
-  It is on GitHub for now and moves to Azure DevOps later, where it runs on temporary Azure resources.
-  This repo is not part of that move.
+## Contents
 
+- [The three repositories](#the-three-repositories)
+- [Words you'll see](#words-youll-see)
+- [The machines](#the-machines)
+- [The big picture](#the-big-picture)
+- [How a change reaches the homelab, step by step](#how-a-change-reaches-the-homelab-step-by-step)
+- [What each tool does](#what-each-tool-does)
+- [How each part is kept safe](#how-each-part-is-kept-safe)
+- [Apps that run here](#apps-that-run-here)
+- [What's in this repo](#whats-in-this-repo)
+- [Guides: rebuild it yourself](#guides-rebuild-it-yourself)
+- [Known gaps](#known-gaps)
+
+## The three repositories
+
+| Repository | What it holds |
+|---|---|
+| **homelab** (this one) | The platform itself: the VMs' setup, Kubernetes, the secrets vault, the pipeline runner, and **which apps are allowed to run** here. It stays at home |
+| **[devops-projects](https://github.com/zulhardy-lab/devops-projects)** | Small apps to learn with (e.g. hpa-demo). It tests, builds and deploys them, but can only deploy apps this repo has allowed |
+| **The capstone project** | Its own repository (name not decided yet): on GitHub for now, moving to Azure DevOps later, running on temporary Azure resources. Not part of this repo |
+
+**Two steps are always done manually: reviewing and merging pull requests, and approving the risky steps**
+(production deploys and infrastructure changes). Everything else runs automatically: tests, security scans, image
+builds and DEV deploys.
+
+## Words you'll see
+
+| Word | Meaning |
+|---|---|
+| **VM** (virtual machine) | A computer simulated in software. Here: ops01, prd01 and dev01, on Hyper-V |
+| **Pull request (PR)** | "Here are my changes, please add them to `main`." Checks run on it before it can be merged |
+| **Pipeline / workflow** | Automatic steps GitHub runs after an event, e.g. a merge (`.github/workflows/*.yml`) |
+| **Runner** | The computer that runs a pipeline's steps. GitHub has its own; this homelab also has one at home, on ops01 |
+| **Ansible / playbook** | A tool that sets up machines from a written description (a *playbook*), the same way every time |
+| **Kubernetes / k3s** | Software that runs apps in containers across several machines and keeps them running. k3s is a small version |
+| **Node** | One machine in the Kubernetes cluster |
+| **Namespace** | A separate area inside Kubernetes. Each app gets `<app>-dev` and `<app>-prd` |
+| **DEV / PRD** | Two environments: DEV (development) for trying changes, PRD (production) for the "real" copy |
+| **OpenBao** | A secrets vault. Here it hands pipelines credentials that expire after 10 minutes |
+| **OIDC token** | A short-lived ID card GitHub gives each pipeline run, saying which repo, branch and workflow it is |
+| **Onboarding** | Allowing an app to run here: giving it namespaces, accounts and vault roles |
+| **Trivy** | A scanner that looks for leaked secrets, unsafe settings and known vulnerabilities |
+| **Pinned** | Fixed to an exact version and checked by checksum, so nothing changes without you knowing |
 
 ## The machines
 
-| Machine | Specs | Role |
+| Machine | Size | Role |
 |---|---|---|
-| **ops01** (192.168.0.102) | Ubuntu 26.04.1, 4 GB RAM, 4 vCPU | Operations: **k3s server** (Kubernetes control plane), GitHub Actions self-hosted runner, OpenBao (secrets vault), Ansible. **Runs no app pods** |
-| **prd01** (192.168.0.103) | Ubuntu 26.04.1, 2 GB RAM, 4 vCPU | **k3s agent, PRD only**: production copy of every app |
-| **dev01** (192.168.0.104), new | Ubuntu 26.04.1, 2 GB RAM, 4 vCPU | **k3s agent, DEV only**: development copy of every app |
+| **ops01** (192.168.0.102) | Ubuntu 26.04.1, 4 GB RAM, 4 vCPU | The "operations" machine: Kubernetes **control plane** (k3s server), the pipeline **runner**, the **OpenBao** vault, **Ansible**. Runs no app pods |
+| **prd01** (192.168.0.103) | Ubuntu 26.04.1, 2 GB RAM, 4 vCPU | Kubernetes worker for **PRD** apps only |
+| **dev01** (192.168.0.104) | Ubuntu 26.04.1, 2 GB RAM, 4 vCPU | Kubernetes worker for **DEV** apps only |
 
-DEV and PRD are separated by **node and namespace**: each app has `<app>-dev` and `<app>-prd` namespaces, and
-Kubernetes forces their pods onto dev01 and prd01 respectively (details in [docs/K3S.md](docs/K3S.md)).
+DEV and PRD are kept apart in two ways: each app has its own `<app>-dev` and `<app>-prd` namespaces, and Kubernetes
+forces their pods onto dev01 and prd01 respectively. [docs/K3S.md](docs/K3S.md) explains how.
 
-## DevOps components
-
-### Architecture at a glance
+## The big picture
 
 ```mermaid
 flowchart TB
-    subgraph GH["GitHub - cloud"]
-        REPO["Repos zulhardy-lab/homelab and devops-projects"]
-        GHA["GitHub Actions - hosted runners: tests, scans, builds"]
-        GHCR["GitHub Container Registry"]
+    subgraph GH["GitHub (cloud)"]
+        REPO["Repos: homelab and devops-projects"]
+        GHA["GitHub's runners: tests, scans, builds"]
+        GHCR["GitHub Container Registry: app images"]
     end
     subgraph O1["ops01 - 192.168.0.102"]
-        RUN["Self-hosted runner - user gha-runner"]
-        BAO["OpenBao - secrets vault"]
+        RUN["Runner (user gha-runner)"]
+        BAO["OpenBao vault"]
         ANS["Ansible"]
-        K3S["k3s server - control plane"]
+        K3S["k3s control plane"]
     end
     subgraph D1["dev01 - 192.168.0.104"]
-        AGD["k3s agent - DEV app pods"]
+        AGD["DEV app pods"]
     end
     subgraph P1["prd01 - 192.168.0.103"]
-        AGP["k3s agent - PRD app pods"]
+        AGP["PRD app pods"]
     end
-    REPO -->|"triggers"| GHA
-    GHA -->|"push tested and scanned image"| GHCR
-    RUN -.->|"outbound HTTPS only"| REPO
-    RUN -->|"GitHub OIDC login"| BAO
+    REPO -->|"starts"| GHA
+    GHA -->|"publishes tested, scanned images"| GHCR
+    RUN -.->|"connects OUT to GitHub only"| REPO
+    RUN -->|"logs in with its GitHub ID card"| BAO
     RUN -->|"runs playbooks"| ANS
     ANS -->|"SSH, 10-minute certificate"| AGD
     ANS -->|"SSH, 10-minute certificate"| AGP
@@ -65,152 +99,174 @@ flowchart TB
     AGP -->|"pull images"| GHCR
 ```
 
-k3s ports between the nodes: 6443/tcp (Kubernetes API), 8472/udp (Flannel VXLAN networking), 10250/tcp (kubelet).
+Three things to notice:
 
-### Components in detail
+1. **Nothing at home is open to the internet.** The runner connects *out* to GitHub and asks for work; GitHub never
+   connects in.
+2. **No passwords or keys are stored in the pipelines.** Each run proves who it is with GitHub's ID card, and
+   OpenBao gives it credentials that expire after 10 minutes.
+3. **Apps are built and checked in the cloud, not at home.** The VMs only download finished, scanned images.
 
-| Area | Tool | Version | Where | What it does here | Managed by |
-|---|---|---|---|---|---|
-| **Version control & change management** | GitHub | n/a | Cloud | Single source of truth. `main` protected by the `protect-main` ruleset: PR required, checks must pass, no force push, no deletion | Repo settings (by hand) |
-| **Continuous integration** | GitHub Actions (GitHub-hosted runners) | `ubuntu-24.04` image | Cloud | Every PR here: lint and a security scan. App tests and image builds run in devops-projects | [`.github/workflows/`](.github/workflows/) |
-| **Testing** | Python `unittest` (standard library), shell integration tests | n/a | GitHub-hosted runners, then the cluster | In devops-projects: unit tests per app, integration test against the built container, smoke test after each DEV and PRD deploy | devops-projects `scripts/` |
-| **Security scanning** | Trivy (Apache-2.0, free) | 0.76.2, binary pinned by SHA-256 | GitHub-hosted runners | Secrets, misconfigurations (Kubernetes, Ansible) and vulnerabilities in this repo; devops-projects also scans every image before it's published | [`scripts/security-scan.sh`](scripts/security-scan.sh) |
-| **Environments & approvals** | GitHub Environments: `platform` here; `dev`, `prd` in devops-projects | n/a | Cloud | `dev`: no approval. `prd` and `platform`: the job waits for a manual approval before it starts | Repo settings (by hand) |
-| **Continuous deployment** | GitHub Actions self-hosted runner, registered at **organization** level (`zulhardy-lab`) | 2.338.2 | ops01 | One runner for both repos, inside the home network: applies the playbooks and onboards apps (this repo), deploys apps (devops-projects). Connects **out** to GitHub only; no inbound ports | [`homelab.yml`](.github/workflows/homelab.yml), [`runner.yml`](ansible/playbooks/runner.yml) |
-| **Configuration management / IaC** | Ansible | from Ubuntu 26.04 repos | ops01 → all VMs | Installs and configures everything on the VMs, idempotently. Run by the homelab pipeline after an approved merge to `ansible/` | [`ansible/`](ansible/) |
-| **Container orchestration** | k3s (Kubernetes) | v1.37.2+k3s1 | ops01 = server, prd01 / dev01 = agents | Runs app pods, restarts failed ones; keeps DEV pods on dev01 and PRD pods on prd01 | [`k3s.yml`](ansible/playbooks/k3s.yml), [K3S.md](docs/K3S.md) |
-| **Ingress / external load balancing** | Traefik + Klipper-lb (bundled with k3s) | bundled | All VMs, port 80/443 | Receives HTTP traffic and routes it to the right Service by host name | k3s |
-| **Internal load balancing** | Kubernetes Service | n/a | Cluster | Spreads requests across all ready pods of an app | Each project's manifests |
-| **Autoscaling** | metrics-server (bundled) + HorizontalPodAutoscaler | bundled | Cluster | Measures pod CPU; the HPA adds or removes pods to hit a CPU target | Each project's manifests |
-| **Service discovery** | CoreDNS (bundled) | bundled | Cluster | Lets pods find Services by name, e.g. `http://hpa-demo.hpa-demo-dev.svc` | k3s |
-| **Container registry** | GitHub Container Registry (GHCR) | n/a | Cloud | Stores the images built by the pipeline; the cluster pulls from here | Project pipelines |
-| **Secrets & supply chain** | GitHub secret scanning + push protection; pinning | n/a | Cloud + repo | Blocks pushes containing known secret types. Runner, k3s, Trivy, OpenBao verified by SHA-256; base images pinned by digest; Actions pinned by commit SHA | Repo settings, playbooks |
-| **Secrets vault / credential broker** | OpenBao | 2.7.3 | ops01, 127.0.0.1:8200 only | Checks each pipeline job's GitHub OIDC token (repo, branch, workflow, **environment**), then hands out 10-minute SSH certificates and Kubernetes tokens. Unseals itself after restarts | [`openbao.yml`](ansible/playbooks/openbao.yml), [OPENBAO.md](docs/OPENBAO.md) |
-| **Machine access for the pipeline** | OpenSSH certificates + `automation` user | OpenSSH from Ubuntu | All VMs | The pipeline logs in as `automation` only with an OpenBao-signed certificate valid 10 minutes. No keys or passwords stored | [`automation-access.yml`](ansible/playbooks/automation-access.yml) |
-| **Monitoring** | `kubectl top` via metrics-server | bundled | Cluster | Live CPU/memory per node and pod. No dashboards or alerting yet | n/a |
+The nodes talk to each other on 6443/tcp (Kubernetes API), 8472/udp (Flannel networking) and 10250/tcp (kubelet).
 
-Docker is **not** installed on the VMs any more: images are built and tested on GitHub's runners, and k3s has its
-own container runtime (containerd). Removing it also removed the runner's `docker` group membership, which was
-effectively root access.
-
-### How each layer is secured
-
-| Layer | Control |
-|---|---|
-| Code | Every change via pull request; the `quality` check (lint, tests, scans) required; merging is always done manually |
-| Pipeline | PR checks run on GitHub's runners, never on the homelab; fork PR workflows need approval; per-run tokens with minimum permissions; OpenBao trusts only `homelab.yml` on `main` of this repo (admin) and `apps.yml` on `main` of devops-projects (deploy only), each by repo ID, and gives PRD or admin credentials only to jobs whose GitHub environment (`prd`, `platform`) was approved |
-| Apps | Only apps in the allowed-apps list `homelab_apps` get namespaces and deployer accounts; adding one needs a PR here plus the `platform` approval. devops-projects can't onboard anything |
-| Runner | Runs as non-root `gha-runner` (not in the `docker` group); reserved for post-merge jobs; its org runner group is limited to the homelab and devops-projects repos |
-| VMs | The pipeline's `automation` user accepts only OpenBao-signed 10-minute SSH certificates; sudo for admin accounts still requires a password; Ansible uses classic `sudo.ws` (see [`ansible.cfg`](ansible/ansible.cfg)) |
-| Kubernetes | Admin kubeconfig on ops01 only (mode 0600); each app has a separate `deployer` per environment (no secrets, no deletes, one namespace); a DEV deployer can't touch PRD; PodNodeSelector keeps DEV pods on dev01 and PRD pods on prd01; app pods run non-root with read-only filesystems and no capabilities |
-| Secrets | OpenBao on loopback only, TLS; root token revoked after setup; recovery keys held by the owner; auto-unseal key on ops01 (backed up by the owner) |
-| **Accepted trade-off** | **An approved homelab run can change anything** on the VMs and in the cluster. The review before merge, plus the approval, is the control. |
-| Supply chain | No `latest` tags anywhere; downloads verified by checksum or digest; no `curl \| sh` install scripts; Trivy installed as a pinned binary, not through a third-party Action |
-
-### Planned
-
-| Component | Purpose |
-|---|---|
-| LitmusChaos (pinned 3.33.0) | Chaos experiments, e.g. killing pods to show self-healing |
-| Monitoring dashboards (e.g. Prometheus + Grafana) | History and alerts instead of only live `kubectl top` |
-
-## Projects and packages (built and tested on the homelab, not part of it)
-
-Mini projects live in **[zulhardy-lab/devops-projects](https://github.com/zulhardy-lab/devops-projects)**, with their
-own pipeline (tests, scans, image builds to `ghcr.io/zulhardy-lab/<app>`, DEV and PRD deploys). They don't set up or
-change the homelab, and you don't need the homelab to try them.
-
-This repo decides **which** apps may run here: the allowed-apps list `homelab_apps` in
-[`ansible/inventory/group_vars/all.yml`](ansible/inventory/group_vars/all.yml). The homelab pipeline onboards every
-listed app after the playbooks (namespaces `<app>-dev` / `<app>-prd`, deployer accounts, OpenBao roles). See
-[Adding an app](docs/AUTOMATION.md#adding-an-app). The list is empty for now: hpa-demo's deploys are switched off.
-
-## How the CI/CD pipeline works
-
-CI/CD here is **GitHub Actions** on free resources: GitHub-hosted runners (free for public repos), GitHub
-Environments (free for public repos), GHCR, Trivy, and the homelab itself.
+## How a change reaches the homelab, step by step
 
 ```mermaid
 flowchart LR
     A["Change on a branch"] --> B["Pull request"]
-    B --> C["CI on GitHub runners: lint, unit tests, integration tests, security scans"]
-    C -->|"fails"| A
-    C -->|"passes"| D["Review and merge"]
+    B --> C["Checks on GitHub's runners: lint, security scan"]
+    C -->|"fail"| A
+    C -->|"pass"| D["Review and merge (manual)"]
     D --> E{"What changed?"}
-    E -->|"ansible files"| F["Approval: platform"]
+    E -->|"ansible/ and pipeline scripts"| F["Approval: platform (manual)"]
     F --> F2["Ansible playbooks on all VMs"]
     F2 --> F3["Onboard the apps in homelab_apps"]
     F3 -.->|"lets devops-projects deploy them"| G["devops-projects pipeline: DEV, then PRD after approval"]
 ```
 
-| Stage | Where it runs | Approval? | What it does |
+**Step 1: Open a pull request.** You change something on a branch, e.g. a playbook in `ansible/`, and open a PR.
+
+**Step 2: PR checks run** on GitHub's machines ([`pr-checks.yml`](.github/workflows/pr-checks.yml)), never at home:
+the files are checked for mistakes (yamllint, Ansible's syntax check and ansible-lint, shellcheck) and Trivy scans
+the repo. A summary check, `quality`, must pass before the PR can be merged.
+
+**Step 3: Review and merge (manual).** `main` is protected: you can't push to it directly.
+
+**Step 4: Approve the platform run (manual).** If the merge changed `ansible/` or the pipeline's scripts, the
+[`homelab.yml`](.github/workflows/homelab.yml) pipeline starts and **waits** for approval in the `platform`
+environment (**Actions** → the run → **Review deployments**).
+
+**Step 5: Apply the change.** After approval, the runner on ops01 gets a 10-minute SSH certificate from OpenBao and
+runs the playbooks on all three VMs: `base.yml`, `k3s.yml`, `openbao.yml`, `automation-access.yml`. Running them
+again when nothing changed is safe: they only fix what's different.
+
+**Step 6: Onboard the allowed apps** (same run). With a 10-minute admin token, it makes sure every app listed in
+`homelab_apps` has its namespaces, accounts and vault roles. Safe to repeat.
+
+**Step 7: The apps deploy themselves**, from the devops-projects pipeline: DEV straight away, PRD after its own
+manual approval. See [its README](https://github.com/zulhardy-lab/devops-projects#how-a-change-gets-deployed-step-by-step).
+
+| Step | Where it runs | Approval? |
+|---|---|---|
+| PR checks | GitHub's machines | No |
+| Review and merge | GitHub | **Manual** |
+| Apply homelab changes (+ onboarding) | Runner on ops01 | **Manual** (environment `platform`) |
+| App tests, builds, DEV deploy | devops-projects | No |
+| App PRD deploy | devops-projects | **Manual** (environment `prd`) |
+
+**Why it's built this way:**
+
+- **The pipeline's logic lives in [`scripts/`](scripts/)**; the workflow files only call it. Moving to Azure
+  Pipelines later means rewriting short YAML files, not the logic.
+- **Approvals only where the risk is:** production deploys, infrastructure, and onboarding. Tests, scans, builds and
+  DEV deploys can't break anything that matters, so they don't wait.
+- **Approvals are checked twice:** GitHub won't start the job until it's approved, and OpenBao won't hand out PRD or
+  admin credentials to a job that isn't in the approved environment.
+- **The platform decides what runs here; the projects repo only deploys.** A change in devops-projects can't create
+  namespaces, accounts or vault roles.
+- **One job at a time at home:** there's a single runner, shared by both repos, so their jobs queue.
+
+The full details (who may do what, the one-time setup, troubleshooting) are in [docs/AUTOMATION.md](docs/AUTOMATION.md).
+
+## What each tool does
+
+| Job | Tool | Where | What it does here |
 |---|---|---|---|
-| **1. PR checks** ([`pr-checks.yml`](.github/workflows/pr-checks.yml)) | GitHub-hosted | No | Lint (yamllint, ansible syntax-check, ansible-lint, shellcheck) and a Trivy repo scan. One summary check, `quality`, must pass before merge |
-| **2. Review and merge** | GitHub | **Manual** | Merging is always done manually; direct pushes to `main` are blocked |
-| **3. Apply homelab changes** ([`homelab.yml`](.github/workflows/homelab.yml)) | ops01 runner | **Yes** (`platform`) | 10-minute SSH certificate from OpenBao; runs `base.yml`, `k3s.yml`, `openbao.yml`, `automation-access.yml` on all VMs |
-| **4. Onboard allowed apps** (same job) | ops01 runner | (same approval) | 10-minute cluster-admin token; for each app in `homelab_apps`: `<app>-dev` / `<app>-prd` namespaces, deployer accounts, OpenBao roles. Safe to repeat |
-| **5. Test, build, deploy apps** | devops-projects, GitHub-hosted + ops01 runner | **Yes** for PRD (`prd` in devops-projects) | See the [devops-projects README](https://github.com/zulhardy-lab/devops-projects#how-a-change-gets-deployed) |
+| **Version control** | GitHub | Cloud | Holds the code. `main` is protected by the `protect-main` ruleset: PR required, checks must pass, no force pushes, no deletion |
+| **Continuous integration** | GitHub Actions on GitHub's runners (`ubuntu-24.04`) | Cloud | Checks and scans every PR here. App tests and builds happen in devops-projects |
+| **Testing** | Python `unittest`, shell integration tests | GitHub's runners, then the cluster | In devops-projects: unit tests, a test against the built container, and a smoke test after each deploy |
+| **Security scanning** | Trivy 0.76.2 (free, open source), pinned by SHA-256 | GitHub's runners | Secrets, unsafe settings (Kubernetes, Ansible) and known vulnerabilities; devops-projects also scans every image before publishing it ([`security-scan.sh`](scripts/security-scan.sh)) |
+| **Approvals** | GitHub Environments: `platform` here; `dev`, `prd` in devops-projects | Cloud | `platform` and `prd` jobs wait for a manual approval; `dev` doesn't |
+| **Continuous deployment** | GitHub Actions self-hosted runner 2.338.2, registered to the `zulhardy-lab` organization | ops01 | One runner for both repos, inside the home network. Connects **out** to GitHub only ([`runner.yml`](ansible/playbooks/runner.yml)) |
+| **Configuration management (infrastructure as code)** | Ansible, from Ubuntu's packages | ops01 → all VMs | Installs and configures everything on the VMs, the same way every time ([`ansible/`](ansible/)) |
+| **Container orchestration** | k3s v1.37.2+k3s1 | ops01 = control plane, prd01 / dev01 = workers | Runs the app pods and restarts failed ones; keeps DEV on dev01 and PRD on prd01 ([K3S.md](docs/K3S.md)) |
+| **Web traffic in** | Traefik + Klipper-lb (come with k3s) | All VMs, ports 80/443 | Receives web requests and sends each to the right app by its address |
+| **Load balancing** | Kubernetes Service | Cluster | Spreads requests across all of an app's ready pods |
+| **Autoscaling** | metrics-server (comes with k3s) + HorizontalPodAutoscaler | Cluster | Measures pod CPU and adds or removes pods to stay near a target |
+| **Service discovery** | CoreDNS (comes with k3s) | Cluster | Lets pods find each other by name, e.g. `http://hpa-demo.hpa-demo-dev.svc` |
+| **Image registry** | GitHub Container Registry (GHCR) | Cloud | Stores the built images; the cluster downloads them from here |
+| **Secrets vault** | OpenBao 2.7.3 | ops01, `127.0.0.1:8200` only | Checks each pipeline job's GitHub ID card, then hands out 10-minute SSH certificates and Kubernetes tokens. Unlocks itself after a restart ([OPENBAO.md](docs/OPENBAO.md)) |
+| **Pipeline access to the VMs** | OpenSSH certificates + the `automation` user | All VMs | The pipeline logs in as `automation` only with a 10-minute certificate from OpenBao. No keys or passwords stored ([`automation-access.yml`](ansible/playbooks/automation-access.yml)) |
+| **Secret and supply-chain safety** | GitHub secret scanning + push protection; pinning | Cloud + repo | Blocks pushes that contain secrets. The runner, k3s, Trivy and OpenBao are checked by SHA-256, base images by digest, Actions by commit SHA |
+| **Monitoring** | `kubectl top` (metrics-server) | Cluster | Live CPU and memory per node and pod. No dashboards or alerts yet |
 
-Design choices:
+**Docker isn't installed on the VMs.** Images are built and tested on GitHub's runners, and k3s has its own
+container runtime (containerd). Removing Docker also removed the runner's `docker` group membership, which was
+effectively root access.
 
-- **Pipeline logic lives in [`scripts/`](scripts/)**, and the workflow YAML only calls it. This keeps the later
-  move to Azure Pipelines small.
-- **Build once, deploy the same image to DEV and PRD** (in devops-projects). Images are tagged with the commit that
-  changed the app (`sha-<commit>`), never `latest`.
-- **The platform decides what runs here; the projects repo only deploys.** Onboarding is driven by `homelab_apps`
-  in this repo, so a change in devops-projects can't create namespaces, accounts or vault roles.
-- **Approvals only where the risk is**: PRD deploys, homelab infrastructure, onboarding (new namespaces, accounts and
-  vault roles). Tests, scans, builds and DEV deploys need no approval.
-- **Approvals are enforced twice**: GitHub won't start the job until a reviewer approves, and OpenBao won't hand out
-  PRD or admin credentials to a job whose token doesn't name the approved environment.
-- **One job at a time on ops01.** There is a single self-hosted runner (org level, shared by both repos), so homelab
-  and app jobs queue.
+## How each part is kept safe
 
-## Layout
+| Part | How |
+|---|---|
+| **Code** | Every change goes through a PR; the `quality` check must pass; merging is always done manually |
+| **Pipelines** | PR checks never run at home; outsiders' PRs need approval before anything runs; each run gets only the permissions it needs. OpenBao trusts only `homelab.yml` on `main` of this repo (admin) and `apps.yml` on `main` of devops-projects (deploy only), each checked by the repo's ID, and gives PRD or admin credentials only to approved jobs |
+| **Apps** | Only apps listed in `homelab_apps` get namespaces and deploy accounts. Adding one needs a PR here plus the `platform` approval |
+| **Runner** | Runs as the ordinary user `gha-runner`, not root and not in the `docker` group; only used after a merge; only the homelab and devops-projects repos can use it |
+| **VMs** | The pipeline's `automation` user only accepts 10-minute certificates signed by OpenBao. Your admin account's `sudo` still asks for a password |
+| **Kubernetes** | The admin credential stays on ops01 (readable only by your admin user). Each app has its own deploy account per environment: one namespace only, no Secrets, no deleting. DEV can't touch PRD. App pods run as non-root with read-only file systems |
+| **Secrets** | OpenBao only listens on ops01 itself, over TLS. No admin token is kept; the recovery keys and the unseal key backup are yours to keep safe |
+| **Supply chain** | No `latest` tags anywhere; every download checked by checksum or digest; no "download and run" install scripts |
+| ⚠️ **Accepted trade-off** | **An approved homelab run can change anything** on the VMs and in the cluster. Reviewing the PR, and the approval, are the controls |
+
+An AI assistant helps write code here, under the rules in [CLAUDE.md](CLAUDE.md). It can only propose changes as
+pull requests, holds no passwords, keys or tokens, and doesn't run commands on the VMs.
+
+**Emergency stop:** on ops01, `sudo systemctl stop 'actions.runner.*'` stops all pipeline jobs, and
+`sudo systemctl stop openbao` stops all pipeline credentials.
+
+## Apps that run here
+
+The apps themselves live in **[devops-projects](https://github.com/zulhardy-lab/devops-projects)**. This repo only
+decides **which** apps may run here: the list `homelab_apps` in
+[`ansible/inventory/group_vars/all.yml`](ansible/inventory/group_vars/all.yml). Right now that's **hpa-demo**, a
+load-balancing and autoscaling demo with a live dashboard.
+
+Adding an app is two pull requests, one in each repo: see
+[Adding an app](docs/AUTOMATION.md#adding-an-app).
+
+## What's in this repo
 
 ```
-ansible/              Ansible config, inventories (hosts.ini for you, automation.ini for the pipeline), playbooks
-scripts/              Pipeline logic: lint, scan, homelab apply + onboarding, bootstrap (workflow YAML only calls these)
-.github/workflows/    Thin CI/CD wrappers
-docs/BOOTSTRAP.md     One-time manual setup of the VMs and the repo
-docs/K3S.md           The Kubernetes cluster, DEV/PRD nodes, renaming nodes
-docs/OPENBAO.md       The secrets vault: install, auto-unseal, recovery keys, how pipelines log in
-docs/AUTOMATION.md    The pipeline, approvals, the one-time bootstrap, onboarding an app, trade-offs
-CLAUDE.md             Rules for the AI agent working in this repo
+ansible/              Ansible settings, the machine lists (inventories) and the playbooks
+scripts/              What the pipelines actually do: lint, scan, apply the playbooks, onboard apps, the bootstrap
+.github/workflows/    Short pipeline files that call the scripts
+docs/BOOTSTRAP.md     Step-by-step guide: build the homelab from nothing
+docs/K3S.md           The Kubernetes cluster and how DEV and PRD are kept apart
+docs/OPENBAO.md       The secrets vault and how pipelines log in
+docs/AUTOMATION.md    The pipelines, approvals, the one-time bootstrap, adding an app
+CLAUDE.md             Rules for the AI assistant working in this repo
 ```
 
-## Security and safety
+## Guides: rebuild it yourself
 
-- **Every change goes through a pull request.** `main` is protected by a ruleset: PR required, checks must pass,
-  no force pushes, no deletion.
-- **No long-lived secrets in the repo or the pipelines.** Secret scanning and push protection are on; Trivy scans
-  for secrets too. Pipelines use GitHub's short-lived tokens and 10-minute credentials from OpenBao.
-- **Versions are pinned**: runner, k3s, OpenBao and Trivy by checksum, container base images by digest, GitHub
-  Actions by commit SHA.
-- **Fork pull requests need approval** before any workflow runs.
-- **Emergency stop**: `sudo systemctl stop 'actions.runner.*'` on ops01 stops all post-merge jobs.
-  `sudo systemctl stop openbao` stops all pipeline credentials.
-- An AI agent helps write code here under the rules in [CLAUDE.md](CLAUDE.md). It can only propose changes as
-  pull requests, holds no passwords, SSH keys or tokens, and doesn't run commands on the VMs.
+Follow them in this order:
 
-## Getting started (rebuilding this homelab)
-
-1. [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md): GitHub organization and repo settings, SSH, runner
+1. [docs/BOOTSTRAP.md](docs/BOOTSTRAP.md): from nothing to three working VMs, GitHub settings and the runner
 2. [docs/K3S.md](docs/K3S.md): the Kubernetes cluster
 3. [docs/OPENBAO.md](docs/OPENBAO.md): the secrets vault
 4. [docs/AUTOMATION.md](docs/AUTOMATION.md): GitHub environments and the one-time bootstrap
+
+Want something smaller first? [homelab-lite](https://github.com/zulhardy-lab/homelab-lite) is a two-VM version for
+laptops, with Docker instead of Kubernetes.
+
+## Planned
+
+| What | Why |
+|---|---|
+| LitmusChaos (pinned 3.33.0) | Chaos experiments, e.g. killing pods to show Kubernetes healing itself |
+| Monitoring dashboards (e.g. Prometheus + Grafana) | History and alerts, not only live numbers |
 
 ## Known gaps
 
 - `runner.yml` isn't run by the pipeline: it would restart the runner in the middle of its own job, and it needs a
   fresh registration token. Runner updates are done by hand (rarely).
-- Removing an app from `homelab_apps` doesn't remove it from the cluster (the homelab run only warns). Removing
-  running apps is a manual step on purpose.
-- [Unverified] Restricting the org runner group to specific workflows ("selected workflows") may not be available on
-  GitHub's free organization plan; OpenBao's per-repo, per-workflow login roles are the control that is in place.
-- DEV and PRD share one cluster (one control plane, one Traefik). Separate clusters would isolate them further, at
-  the cost of more RAM; the capstone's Azure setup can use separate resources per environment.
-- [Unverified] PodNodeSelector only applies a namespace's node rule to the pod's `nodeSelector`; a manifest that
-  sets `nodeName` directly could bypass the scheduler. Manifests are reviewed in pull requests.
-- Ansible uses classic `sudo` (`sudo.ws`) because Ubuntu 26.04's `sudo-rs` isn't yet compatible with it
-  (see [`ansible/ansible.cfg`](ansible/ansible.cfg)).
+- Taking an app out of `homelab_apps` doesn't remove it from the cluster (the homelab run only warns). Removing
+  running apps is a manual step, on purpose.
+- [Unverified] Limiting the runner group to specific workflows may not be available on GitHub's free organization
+  plan. OpenBao's per-repo, per-workflow login roles are the control in place instead.
+- DEV and PRD share one cluster (one control plane, one Traefik). Separate clusters would isolate them more, but need
+  more RAM. The capstone's Azure setup can use separate resources per environment.
+- [Unverified] The rule that keeps DEV pods on dev01 works through the pod's `nodeSelector`; a manifest that sets
+  `nodeName` directly could get around it. Manifests are reviewed in pull requests.
+- Ansible uses the classic `sudo` (`sudo.ws`) because Ubuntu 26.04's newer `sudo-rs` doesn't work with it yet (see
+  [`ansible/ansible.cfg`](ansible/ansible.cfg)).
