@@ -208,7 +208,7 @@ effectively root access.
 | **Supply chain** | No `latest` tags anywhere; every download checked by checksum or digest; no "download and run" install scripts |
 | ⚠️ **Accepted trade-off** | **An approved homelab run can change anything** on the VMs and in the cluster. Reviewing the PR, and the approval, are the controls |
 
-An AI assistant helps write code here, under the rules in [CLAUDE.md](CLAUDE.md). It can only propose changes as
+An AI assistant helps write code here, under the rules in [AGENTS.md](AGENTS.md). It can only propose changes as
 pull requests, holds no passwords, keys or tokens, and doesn't run commands on the VMs.
 
 **Emergency stop:** on ops01, `sudo systemctl stop 'actions.runner.*'` stops all pipeline jobs, and
@@ -234,7 +234,7 @@ docs/BOOTSTRAP.md     Step-by-step guide: build the homelab from nothing
 docs/K3S.md           The Kubernetes cluster and how DEV and PRD are kept apart
 docs/OPENBAO.md       The secrets vault and how pipelines log in
 docs/AUTOMATION.md    The pipelines, approvals, the one-time bootstrap, adding an app
-CLAUDE.md             Rules for the AI assistant working in this repo
+AGENTS.md             Rules for the AI assistant working in this repo
 ```
 
 ## Guides: rebuild it yourself
